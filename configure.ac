@@ -42,8 +42,10 @@ m4_define([gtkhtml_minimum_version], [4.1.2])
 m4_define([gnome_desktop_minimum_version], [2.91.3])
 m4_define([gnome_icon_theme_minimum_version], [2.30.2.1])
 m4_define([gsettings_desktop_schemas_minimum_version], [2.91.92])
+m4_define([pangoft2_minimum_version], [1.0.1])		dnl For libgnomecanvas
+m4_define([webkit_minimum_version], [1.1.15])		dnl XXX Just a Guess
 m4_define([gconf_minimum_version], [2.0.0])		dnl XXX Just a Guess
-m4_define([libsoup_minimum_version], [2.31.2])
+m4_define([libsoup_minimum_version], [2.4.0])		dnl XXX Just a Guess
 m4_define([libxml_minimum_version], [2.7.3])
 m4_define([shared_mime_info_minimum_version], [0.22])
 m4_define([libpst_minimum_version], [0.6.41])
@@ -250,7 +252,8 @@ PKG_CHECK_MODULES([GNOME_PLATFORM],
 	 libxml-2.0 >= libxml_minimum_version
 	 shared-mime-info >= shared_mime_info_minimum_version
 	 gnome-desktop-3.0 >= gnome_desktop_minimum_version
-	 gsettings-desktop-schemas >= gsettings_desktop_schemas_minimum_version])
+	 gsettings-desktop-schemas >= gsettings_desktop_schemas_minimum_version
+	 webkit-1.0 >= webkit_minimum_version])
 AC_SUBST(GNOME_PLATFORM_CFLAGS)
 AC_SUBST(GNOME_PLATFORM_LIBS)
 
