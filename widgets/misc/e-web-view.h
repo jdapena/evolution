@@ -27,7 +27,7 @@
 #ifndef E_WEB_VIEW_H
 #define E_WEB_VIEW_H
 
-#include <gtkhtml/gtkhtml.h>
+#include <webkit/webkit.h>
 
 /* Standard GObject macros */
 #define E_TYPE_WEB_VIEW \
@@ -55,17 +55,20 @@ typedef struct _EWebViewClass EWebViewClass;
 typedef struct _EWebViewPrivate EWebViewPrivate;
 
 struct _EWebView {
-	GtkHTML parent;
+	WebKitWebView parent;
 	EWebViewPrivate *priv;
 };
 
 struct _EWebViewClass {
-	GtkHTMLClass parent_class;
+	WebKitWebViewClass parent_class;
 
 	/* Methods */
+	GtkWidget *	(*create_plugin_widget)	(EWebView *web_view,
+						 const gchar *mime_type,
+						 const gchar *uri,
+						 GHashTable *param);
 	gchar *		(*extract_uri)		(EWebView *web_view,
-						 GdkEventButton *event,
-						 GtkHTML *frame);
+						 GdkEventButton *event);
 	void		(*hovering_over_link)	(EWebView *web_view,
 						 const gchar *title,
 						 const gchar *uri);
@@ -75,9 +78,6 @@ struct _EWebViewClass {
 						 const gchar *load_string);
 
 	/* Signals */
-	void		(*copy_clipboard)	(EWebView *web_view);
-	void		(*cut_clipboard)	(EWebView *web_view);
-	void		(*paste_clipboard)	(EWebView *web_view);
 	gboolean	(*popup_event)		(EWebView *web_view,
 						 GdkEventButton *event,
 						 const gchar *uri);
@@ -147,8 +147,7 @@ GtkAction *	e_web_view_get_action		(EWebView *web_view,
 GtkActionGroup *e_web_view_get_action_group	(EWebView *web_view,
 						 const gchar *group_name);
 gchar *		e_web_view_extract_uri		(EWebView *web_view,
-						 GdkEventButton *event,
-						 GtkHTML *frame);
+						 GdkEventButton *event);
 void		e_web_view_copy_clipboard	(EWebView *web_view);
 void		e_web_view_cut_clipboard	(EWebView *web_view);
 gboolean	e_web_view_is_selection_active	(EWebView *web_view);

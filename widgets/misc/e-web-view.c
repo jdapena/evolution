@@ -53,12 +53,11 @@ struct _EWebViewPrivate {
 	GtkAction *print_proxy;
 	GtkAction *save_as_proxy;
 
-	GtkTargetList *copy_target_list;
-	GtkTargetList *paste_target_list;
-
 	/* Lockdown Options */
 	guint disable_printing     : 1;
 	guint disable_save_to_disk : 1;
+
+	guint caret_mode : 1;
 };
 
 struct _EWebViewRequest {
@@ -66,7 +65,7 @@ struct _EWebViewRequest {
 	EWebView *web_view;
 	GCancellable *cancellable;
 	GInputStream *input_stream;
-	GtkHTMLStream *output_stream;
+	GString *output_buffer;
 	gchar buffer[4096];
 };
 
@@ -74,26 +73,20 @@ enum {
 	PROP_0,
 	PROP_ANIMATE,
 	PROP_CARET_MODE,
-	PROP_COPY_TARGET_LIST,
 	PROP_CURSOR_IMAGE,
 	PROP_CURSOR_IMAGE_SRC,
 	PROP_DISABLE_PRINTING,
 	PROP_DISABLE_SAVE_TO_DISK,
-	PROP_EDITABLE,
 	PROP_INLINE_SPELLING,
 	PROP_MAGIC_LINKS,
 	PROP_MAGIC_SMILEYS,
 	PROP_OPEN_PROXY,
-	PROP_PASTE_TARGET_LIST,
 	PROP_PRINT_PROXY,
 	PROP_SAVE_AS_PROXY,
 	PROP_SELECTED_URI
 };
 
 enum {
-	COPY_CLIPBOARD,
-	CUT_CLIPBOARD,
-	PASTE_CLIPBOARD,
 	POPUP_EVENT,
 	STATUS_MESSAGE,
 	STOP_LOADING,
@@ -135,7 +128,7 @@ static void e_web_view_selectable_init (ESelectableInterface *interface);
 G_DEFINE_TYPE_WITH_CODE (
 	EWebView,
 	e_web_view,
-	GTK_TYPE_HTML,
+	WEBKIT_TYPE_WEB_VIEW,
 	G_IMPLEMENT_INTERFACE (
 		E_TYPE_EXTENSIBLE, NULL)
 	G_IMPLEMENT_INTERFACE (
@@ -147,8 +140,7 @@ G_DEFINE_TYPE_WITH_CODE (
 
 static EWebViewRequest *
 web_view_request_new (EWebView *web_view,
-                      const gchar *uri,
-                      GtkHTMLStream *stream)
+                      const gchar *uri)
 {
 	EWebViewRequest *request;
 	GList *list;
@@ -164,7 +156,7 @@ web_view_request_new (EWebView *web_view,
 	request->web_view = g_object_ref (web_view);
 	request->cancellable = g_cancellable_new ();
 	request->input_stream = NULL;
-	request->output_stream = stream;
+	request->output_buffer = g_string_sized_new (4096);
 
 	list = request->web_view->priv->requests;
 	list = g_list_prepend (list, request);
@@ -189,6 +181,8 @@ web_view_request_free (EWebViewRequest *request)
 	if (request->input_stream != NULL)
 		g_object_unref (request->input_stream);
 
+	g_string_free (request->output_buffer, TRUE);
+
 	g_slice_free (EWebViewRequest, request);
 }
 
@@ -202,9 +196,6 @@ static gboolean
 web_view_request_check_for_error (EWebViewRequest *request,
                                   GError *error)
 {
-	GtkHTML *html;
-	GtkHTMLStream *stream;
-
 	if (error == NULL)
 		return FALSE;
 
@@ -216,10 +207,6 @@ web_view_request_check_for_error (EWebViewRequest *request,
 
 	/* XXX Should we log errors that are not cancellations? */
 
-	html = GTK_HTML (request->web_view);
-	stream = request->output_stream;
-
-	gtk_html_end (html, stream, GTK_HTML_STREAM_ERROR);
 	web_view_request_free (request);
 	g_error_free (error);
 
@@ -240,16 +227,15 @@ web_view_request_stream_read_cb (GInputStream *input_stream,
 		return;
 
 	if (bytes_read == 0) {
-		gtk_html_end (
-			GTK_HTML (request->web_view),
-			request->output_stream, GTK_HTML_STREAM_OK);
+		e_web_view_load_string (
+			request->web_view,
+			request->output_buffer->str);
 		web_view_request_free (request);
 		return;
 	}
 
-	gtk_html_write (
-		GTK_HTML (request->web_view),
-		request->output_stream, request->buffer, bytes_read);
+	g_string_append_len (
+		request->output_buffer, request->buffer, bytes_read);
 
 	g_input_stream_read_async (
 		request->input_stream, request->buffer,
@@ -470,55 +456,6 @@ static GtkActionEntry standard_entries[] = {
 	  G_CALLBACK (action_select_all_cb) }
 };
 
-static gboolean
-web_view_button_press_event_cb (EWebView *web_view,
-                                GdkEventButton *event,
-                                GtkHTML *frame)
-{
-	gboolean event_handled = FALSE;
-	gchar *uri = NULL;
-
-	if (event) {
-		GdkPixbufAnimation *anim;
-		gchar *image_src;
-
-		if (frame == NULL)
-			frame = GTK_HTML (web_view);
-
-		anim = gtk_html_get_image_at (frame, event->x, event->y);
-		e_web_view_set_cursor_image (web_view, anim);
-		if (anim != NULL)
-			g_object_unref (anim);
-
-		image_src = gtk_html_get_image_src_at (
-			frame, event->x, event->y);
-		e_web_view_set_cursor_image_src (web_view, image_src);
-		g_free (image_src);
-	}
-
-	if (event != NULL && event->button != 3)
-		return FALSE;
-
-	/* Only extract a URI if no selection is active.  Selected text
-	 * implies the user is more likely to want to copy the selection
-	 * to the clipboard than open a link within the selection. */
-	if (!e_web_view_is_selection_active (web_view))
-		uri = e_web_view_extract_uri (web_view, event, frame);
-
-	if (uri != NULL && g_str_has_prefix (uri, "##")) {
-		g_free (uri);
-		return FALSE;
-	}
-
-	g_signal_emit (
-		web_view, signals[POPUP_EVENT], 0,
-		event, uri, &event_handled);
-
-	g_free (uri);
-
-	return event_handled;
-}
-
 static void
 web_view_menu_item_select_cb (EWebView *web_view,
                               GtkWidget *widget)
@@ -560,6 +497,98 @@ web_view_connect_proxy_cb (EWebView *web_view,
 		G_CALLBACK (web_view_menu_item_deselect_cb), web_view);
 }
 
+static GtkWidget *
+web_view_create_plugin_widget_cb (EWebView *web_view,
+                                  const gchar *mime_type,
+                                  const gchar *uri,
+                                  GHashTable *param)
+{
+	EWebViewClass *class;
+
+	/* XXX WebKitWebView does not provide a class method for
+	 *     this signal, so we do so we can override the default
+	 *     behavior from subclasses for special URI types. */
+
+	class = E_WEB_VIEW_GET_CLASS (web_view);
+	g_return_val_if_fail (class->create_plugin_widget != NULL, NULL);
+
+	return class->create_plugin_widget (web_view, mime_type, uri, param);
+}
+
+static void
+web_view_hovering_over_link_cb (EWebView *web_view,
+                                const gchar *title,
+                                const gchar *uri)
+{
+	EWebViewClass *class;
+
+	/* XXX WebKitWebView does not provide a class method for
+	 *     this signal, so we do so we can override the default
+	 *     behavior from subclasses for special URI types. */
+
+	class = E_WEB_VIEW_GET_CLASS (web_view);
+	g_return_if_fail (class->hovering_over_link != NULL);
+
+	class->hovering_over_link (web_view, title, uri);
+}
+
+static gboolean
+web_view_navigation_policy_decision_requested_cb (EWebView *web_view,
+                                                  WebKitWebFrame *frame,
+                                                  WebKitNetworkRequest *request,
+                                                  WebKitWebNavigationAction *navigation_action,
+                                                  WebKitWebPolicyDecision *policy_decision)
+{
+	EWebViewClass *class;
+	WebKitWebNavigationReason reason;
+	const gchar *uri;
+
+	reason = webkit_web_navigation_action_get_reason (navigation_action);
+	if (reason != WEBKIT_WEB_NAVIGATION_REASON_LINK_CLICKED)
+		return FALSE;
+
+	/* XXX WebKitWebView does not provide a class method for
+	 *     this signal, so we do so we can override the default
+	 *     behavior from subclasses for special URI types. */
+
+	class = E_WEB_VIEW_GET_CLASS (web_view);
+	g_return_val_if_fail (class->link_clicked != NULL, FALSE);
+
+	webkit_web_policy_decision_ignore (policy_decision);
+
+	uri = webkit_network_request_get_uri (request);
+
+	class->link_clicked (web_view, uri);
+
+	return TRUE;
+}
+
+static gboolean
+web_view_notify_load_state_idle_cb (gpointer data)
+{
+	/* XXX Xan says I need to queue a resize here in order for
+	 *     embedded widgets to show.  It's a WebKit/GTK+ bug. */
+	gtk_widget_queue_resize (GTK_WIDGET (data));
+
+	g_debug ("Load Finished");
+
+	return FALSE;
+}
+
+static void
+web_view_notify_load_status_cb (WebKitWebView *web_view,
+                                GParamSpec *pspec)
+{
+	WebKitLoadStatus load_status;
+
+	load_status = webkit_web_view_get_load_status (web_view);
+
+	if (load_status == WEBKIT_LOAD_FINISHED) {
+		gdk_threads_add_idle (
+			web_view_notify_load_state_idle_cb, web_view);
+	}
+}
+
 static void
 web_view_set_property (GObject *object,
                        guint property_id,
@@ -599,12 +628,6 @@ web_view_set_property (GObject *object,
 
 		case PROP_DISABLE_SAVE_TO_DISK:
 			e_web_view_set_disable_save_to_disk (
-				E_WEB_VIEW (object),
-				g_value_get_boolean (value));
-			return;
-
-		case PROP_EDITABLE:
-			e_web_view_set_editable (
 				E_WEB_VIEW (object),
 				g_value_get_boolean (value));
 			return;
@@ -674,12 +697,6 @@ web_view_get_property (GObject *object,
 				E_WEB_VIEW (object)));
 			return;
 
-		case PROP_COPY_TARGET_LIST:
-			g_value_set_boxed (
-				value, e_web_view_get_copy_target_list (
-				E_WEB_VIEW (object)));
-			return;
-
 		case PROP_CURSOR_IMAGE:
 			g_value_set_object (
 				value, e_web_view_get_cursor_image (
@@ -704,12 +721,6 @@ web_view_get_property (GObject *object,
 				E_WEB_VIEW (object)));
 			return;
 
-		case PROP_EDITABLE:
-			g_value_set_boolean (
-				value, e_web_view_get_editable (
-				E_WEB_VIEW (object)));
-			return;
-
 		case PROP_INLINE_SPELLING:
 			g_value_set_boolean (
 				value, e_web_view_get_inline_spelling (
@@ -731,12 +742,6 @@ web_view_get_property (GObject *object,
 		case PROP_OPEN_PROXY:
 			g_value_set_object (
 				value, e_web_view_get_open_proxy (
-				E_WEB_VIEW (object)));
-			return;
-
-		case PROP_PASTE_TARGET_LIST:
-			g_value_set_boxed (
-				value, e_web_view_get_paste_target_list (
 				E_WEB_VIEW (object)));
 			return;
 
@@ -787,16 +792,6 @@ web_view_dispose (GObject *object)
 	if (priv->save_as_proxy != NULL) {
 		g_object_unref (priv->save_as_proxy);
 		priv->save_as_proxy = NULL;
-	}
-
-	if (priv->copy_target_list != NULL) {
-		gtk_target_list_unref (priv->copy_target_list);
-		priv->copy_target_list = NULL;
-	}
-
-	if (priv->paste_target_list != NULL) {
-		gtk_target_list_unref (priv->paste_target_list);
-		priv->paste_target_list = NULL;
 	}
 
 	if (priv->cursor_image != NULL) {
@@ -861,12 +856,31 @@ web_view_button_press_event (GtkWidget *widget,
 {
 	GtkWidgetClass *widget_class;
 	EWebView *web_view;
+	gboolean event_handled = FALSE;
+	gchar *uri;
 
 	web_view = E_WEB_VIEW (widget);
 
-	if (web_view_button_press_event_cb (web_view, event, NULL))
+	if (event != NULL && event->button != 3)
+		goto chainup;
+
+	uri = e_web_view_extract_uri (web_view, event);
+
+	if (uri != NULL && g_str_has_prefix (uri, "##")) {
+		g_free (uri);
+		goto chainup;
+	}
+
+	g_signal_emit (
+		web_view, signals[POPUP_EVENT], 0,
+		event, uri, &event_handled);
+
+	g_free (uri);
+
+	if (event_handled)
 		return TRUE;
 
+chainup:
 	/* Chain up to parent's button_press_event() method. */
 	widget_class = GTK_WIDGET_CLASS (parent_class);
 	return widget_class->button_press_event (widget, event);
@@ -879,10 +893,10 @@ web_view_scroll_event (GtkWidget *widget,
 	if (event->state & GDK_CONTROL_MASK) {
 		switch (event->direction) {
 			case GDK_SCROLL_UP:
-				gtk_html_zoom_in (GTK_HTML (widget));
+				e_web_view_zoom_in (E_WEB_VIEW (widget));
 				return TRUE;
 			case GDK_SCROLL_DOWN:
-				gtk_html_zoom_out (GTK_HTML (widget));
+				e_web_view_zoom_out (E_WEB_VIEW (widget));
 				return TRUE;
 			default:
 				break;
@@ -892,6 +906,7 @@ web_view_scroll_event (GtkWidget *widget,
 	return FALSE;
 }
 
+#if 0  /* WEBKIT */
 static void
 web_view_url_requested (GtkHTML *html,
                         const gchar *uri,
@@ -906,60 +921,73 @@ web_view_url_requested (GtkHTML *html,
 		request->cancellable, (GAsyncReadyCallback)
 		web_view_request_read_cb, request);
 }
+#endif
 
-static void
-web_view_gtkhtml_link_clicked (GtkHTML *html,
-                               const gchar *uri)
+static GtkWidget *
+web_view_create_plugin_widget (EWebView *web_view,
+                               const gchar *mime_type,
+                               const gchar *uri,
+                               GHashTable *param)
 {
-	EWebViewClass *class;
-	EWebView *web_view;
+	GtkWidget *widget = NULL;
 
-	web_view = E_WEB_VIEW (html);
+	if (g_strcmp0 (mime_type, "image/x-themed-icon") == 0) {
+		GtkIconTheme *icon_theme;
+		GdkPixbuf *pixbuf;
+		gpointer data;
+		glong size = 0;
+		GError *error = NULL;
 
-	class = E_WEB_VIEW_GET_CLASS (web_view);
-	g_return_if_fail (class->link_clicked != NULL);
+		icon_theme = gtk_icon_theme_get_default ();
 
-	class->link_clicked (web_view, uri);
-}
+		if (size == 0) {
+			data = g_hash_table_lookup (param, "width");
+			if (data != NULL)
+				size = MAX (size, strtol (data, NULL, 10));
+		}
 
-static void
-web_view_on_url (GtkHTML *html,
-                 const gchar *uri)
-{
-	EWebViewClass *class;
-	EWebView *web_view;
+		if (size == 0) {
+			data = g_hash_table_lookup (param, "height");
+			if (data != NULL)
+				size = MAX (size, strtol (data, NULL, 10));
+		}
 
-	web_view = E_WEB_VIEW (html);
+		if (size == 0)
+			size = 32;  /* arbitrary default */
 
-	class = E_WEB_VIEW_GET_CLASS (web_view);
-	g_return_if_fail (class->hovering_over_link != NULL);
+		pixbuf = gtk_icon_theme_load_icon (
+			icon_theme, uri, size, 0, &error);
+		if (pixbuf != NULL) {
+			widget = gtk_image_new_from_pixbuf (pixbuf);
+			g_object_unref (pixbuf);
+		} else if (error != NULL) {
+			g_warning ("%s", error->message);
+			g_error_free (error);
+		}
+	}
 
-	/* XXX WebKit would supply a title here. */
-	class->hovering_over_link (web_view, NULL, uri);
-}
-
-static void
-web_view_iframe_created (GtkHTML *html,
-                         GtkHTML *iframe)
-{
-	g_signal_connect_swapped (
-		iframe, "button-press-event",
-		G_CALLBACK (web_view_button_press_event_cb), html);
+	return widget;
 }
 
 static gchar *
 web_view_extract_uri (EWebView *web_view,
-                      GdkEventButton *event,
-                      GtkHTML *html)
+                      GdkEventButton *event)
 {
-	gchar *uri;
+	WebKitHitTestResult *result;
+	WebKitHitTestResultContext context;
+	gchar *uri = NULL;
 
-	if (event != NULL)
-		uri = gtk_html_get_url_at (html, event->x, event->y);
-	else
-		uri = gtk_html_get_cursor_url (html);
+	result = webkit_web_view_get_hit_test_result (
+		WEBKIT_WEB_VIEW (web_view), event);
 
-	return uri;
+	g_object_get (result, "context", &context, "link-uri", &uri, NULL);
+
+	if (context & WEBKIT_HIT_TEST_RESULT_CONTEXT_LINK)
+		return uri;
+
+	g_free (uri);
+
+	return NULL;
 }
 
 static void
@@ -1030,30 +1058,12 @@ static void
 web_view_load_string (EWebView *web_view,
                       const gchar *string)
 {
-	if (string != NULL && *string != '\0')
-		gtk_html_load_from_string (GTK_HTML (web_view), string, -1);
-	else
-		e_web_view_clear (web_view);
-}
+	if (string == NULL)
+		string = "";
 
-static void
-web_view_copy_clipboard (EWebView *web_view)
-{
-	gtk_html_command (GTK_HTML (web_view), "copy");
-}
-
-static void
-web_view_cut_clipboard (EWebView *web_view)
-{
-	if (e_web_view_get_editable (web_view))
-		gtk_html_command (GTK_HTML (web_view), "cut");
-}
-
-static void
-web_view_paste_clipboard (EWebView *web_view)
-{
-	if (e_web_view_get_editable (web_view))
-		gtk_html_command (GTK_HTML (web_view), "paste");
+	webkit_web_view_load_string (
+		WEBKIT_WEB_VIEW (web_view),
+		string, "text/html", "UTF-8", NULL);
 }
 
 static gboolean
@@ -1074,7 +1084,7 @@ web_view_stop_loading (EWebView *web_view)
 		web_view->priv->requests, (GFunc)
 		web_view_request_cancel, NULL);
 
-	gtk_html_stop (GTK_HTML (web_view));
+	webkit_web_view_stop_loading (WEBKIT_WEB_VIEW (web_view));
 }
 
 static void
@@ -1267,48 +1277,27 @@ web_view_selectable_update_actions (ESelectable *selectable,
                                     GdkAtom *clipboard_targets,
                                     gint n_clipboard_targets)
 {
-	EWebView *web_view;
+	WebKitWebView *web_view;
 	GtkAction *action;
-	/*GtkTargetList *target_list;*/
-	gboolean can_paste = FALSE;
-	gboolean editable;
-	gboolean have_selection;
 	gboolean sensitive;
 	const gchar *tooltip;
-	/*gint ii;*/
 
-	web_view = E_WEB_VIEW (selectable);
-	editable = e_web_view_get_editable (web_view);
-	have_selection = e_web_view_is_selection_active (web_view);
-
-	/* XXX GtkHtml implements its own clipboard instead of using
-	 *     GDK_SELECTION_CLIPBOARD, so we don't get notifications
-	 *     when the clipboard contents change.  The logic below
-	 *     is what we would do if GtkHtml worked properly.
-	 *     Instead, we need to keep the Paste action sensitive so
-	 *     its accelerator overrides GtkHtml's key binding. */
-#if 0
-	target_list = e_selectable_get_paste_target_list (selectable);
-	for (ii = 0; ii < n_clipboard_targets && !can_paste; ii++)
-		can_paste = gtk_target_list_find (
-			target_list, clipboard_targets[ii], NULL);
-#endif
-	can_paste = TRUE;
+	web_view = WEBKIT_WEB_VIEW (selectable);
 
 	action = e_focus_tracker_get_cut_clipboard_action (focus_tracker);
-	sensitive = editable && have_selection;
+	sensitive = webkit_web_view_can_cut_clipboard (web_view);
 	tooltip = _("Cut the selection");
 	gtk_action_set_sensitive (action, sensitive);
 	gtk_action_set_tooltip (action, tooltip);
 
 	action = e_focus_tracker_get_copy_clipboard_action (focus_tracker);
-	sensitive = have_selection;
+	sensitive = webkit_web_view_can_copy_clipboard (web_view);
 	tooltip = _("Copy the selection");
 	gtk_action_set_sensitive (action, sensitive);
 	gtk_action_set_tooltip (action, tooltip);
 
 	action = e_focus_tracker_get_paste_clipboard_action (focus_tracker);
-	sensitive = editable && can_paste;
+	sensitive = webkit_web_view_can_paste_clipboard (web_view);
 	tooltip = _("Paste the clipboard");
 	gtk_action_set_sensitive (action, sensitive);
 	gtk_action_set_tooltip (action, tooltip);
@@ -1349,7 +1338,9 @@ e_web_view_class_init (EWebViewClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
+#if 0  /* WEBKIT */
 	GtkHTMLClass *html_class;
+#endif
 
 	parent_class = g_type_class_peek_parent (class);
 	g_type_class_add_private (class, sizeof (EWebViewPrivate));
@@ -1365,19 +1356,16 @@ e_web_view_class_init (EWebViewClass *class)
 	widget_class->button_press_event = web_view_button_press_event;
 	widget_class->scroll_event = web_view_scroll_event;
 
+#if 0  /* WEBKIT */
 	html_class = GTK_HTML_CLASS (class);
 	html_class->url_requested = web_view_url_requested;
-	html_class->link_clicked = web_view_gtkhtml_link_clicked;
-	html_class->on_url = web_view_on_url;
-	html_class->iframe_created = web_view_iframe_created;
+#endif
 
+	class->create_plugin_widget = web_view_create_plugin_widget;
 	class->extract_uri = web_view_extract_uri;
 	class->hovering_over_link = web_view_hovering_over_link;
 	class->link_clicked = web_view_link_clicked;
 	class->load_string = web_view_load_string;
-	class->copy_clipboard = web_view_copy_clipboard;
-	class->cut_clipboard = web_view_cut_clipboard;
-	class->paste_clipboard = web_view_paste_clipboard;
 	class->popup_event = web_view_popup_event;
 	class->stop_loading = web_view_stop_loading;
 	class->update_actions = web_view_update_actions;
@@ -1452,16 +1440,6 @@ e_web_view_class_init (EWebViewClass *class)
 
 	g_object_class_install_property (
 		object_class,
-		PROP_EDITABLE,
-		g_param_spec_boolean (
-			"editable",
-			"Editable",
-			NULL,
-			FALSE,
-			G_PARAM_READWRITE));
-
-	g_object_class_install_property (
-		object_class,
 		PROP_INLINE_SPELLING,
 		g_param_spec_boolean (
 			"inline-spelling",
@@ -1500,12 +1478,6 @@ e_web_view_class_init (EWebViewClass *class)
 			GTK_TYPE_ACTION,
 			G_PARAM_READWRITE));
 
-	/* Inherited from ESelectableInterface */
-	g_object_class_override_property (
-		object_class,
-		PROP_PASTE_TARGET_LIST,
-		"paste-target-list");
-
 	g_object_class_install_property (
 		object_class,
 		PROP_PRINT_PROXY,
@@ -1535,33 +1507,6 @@ e_web_view_class_init (EWebViewClass *class)
 			NULL,
 			NULL,
 			G_PARAM_READWRITE));
-
-	signals[COPY_CLIPBOARD] = g_signal_new (
-		"copy-clipboard",
-		G_TYPE_FROM_CLASS (class),
-		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-		G_STRUCT_OFFSET (EWebViewClass, copy_clipboard),
-		NULL, NULL,
-		g_cclosure_marshal_VOID__VOID,
-		G_TYPE_NONE, 0);
-
-	signals[CUT_CLIPBOARD] = g_signal_new (
-		"cut-clipboard",
-		G_TYPE_FROM_CLASS (class),
-		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-		G_STRUCT_OFFSET (EWebViewClass, cut_clipboard),
-		NULL, NULL,
-		g_cclosure_marshal_VOID__VOID,
-		G_TYPE_NONE, 0);
-
-	signals[PASTE_CLIPBOARD] = g_signal_new (
-		"paste-clipboard",
-		G_TYPE_FROM_CLASS (class),
-		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-		G_STRUCT_OFFSET (EWebViewClass, paste_clipboard),
-		NULL, NULL,
-		g_cclosure_marshal_VOID__VOID,
-		G_TYPE_NONE, 0);
 
 	signals[POPUP_EVENT] = g_signal_new (
 		"popup-event",
@@ -1634,13 +1579,30 @@ e_web_view_init (EWebView *web_view)
 {
 	GtkUIManager *ui_manager;
 	GtkActionGroup *action_group;
-	GtkTargetList *target_list;
 	EPopupAction *popup_action;
+	WebKitWebSettings *web_settings;
 	const gchar *domain = GETTEXT_PACKAGE;
 	const gchar *id;
 	GError *error = NULL;
 
 	web_view->priv = E_WEB_VIEW_GET_PRIVATE (web_view);
+
+	g_signal_connect (
+		web_view, "create-plugin-widget",
+		G_CALLBACK (web_view_create_plugin_widget_cb), NULL);
+
+	g_signal_connect (
+		web_view, "hovering-over-link",
+		G_CALLBACK (web_view_hovering_over_link_cb), NULL);
+
+	g_signal_connect (
+		web_view, "navigation-policy-decision-requested",
+		G_CALLBACK (web_view_navigation_policy_decision_requested_cb),
+		NULL);
+
+	g_signal_connect (
+		web_view, "notify::load-status",
+		G_CALLBACK (web_view_notify_load_status_cb), NULL);
 
 	ui_manager = gtk_ui_manager_new ();
 	web_view->priv->ui_manager = ui_manager;
@@ -1649,11 +1611,14 @@ e_web_view_init (EWebView *web_view)
 		ui_manager, "connect-proxy",
 		G_CALLBACK (web_view_connect_proxy_cb), web_view);
 
-	target_list = gtk_target_list_new (NULL, 0);
-	web_view->priv->copy_target_list = target_list;
+	web_settings = webkit_web_view_get_settings (
+		WEBKIT_WEB_VIEW (web_view));
 
-	target_list = gtk_target_list_new (NULL, 0);
-	web_view->priv->paste_target_list = target_list;
+	g_object_bind_property (
+		web_view, "caret-mode",
+		web_settings, "enable-caret-browsing",
+		G_BINDING_BIDIRECTIONAL |
+		G_BINDING_SYNC_CREATE);
 
 	action_group = gtk_action_group_new ("uri");
 	gtk_action_group_set_translation_domain (action_group, domain);
@@ -1776,7 +1741,7 @@ e_web_view_clear (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_load_empty (GTK_HTML (web_view));
+	e_web_view_load_string (web_view, NULL);
 }
 
 void
@@ -1796,18 +1761,23 @@ e_web_view_load_string (EWebView *web_view,
 gboolean
 e_web_view_get_animate (EWebView *web_view)
 {
+#if 0  /* WEBKIT - XXX No equivalent property? */
 	/* XXX This is just here to maintain symmetry
 	 *     with e_web_view_set_animate(). */
 
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
 	return gtk_html_get_animate (GTK_HTML (web_view));
+#endif
+
+	return FALSE;
 }
 
 void
 e_web_view_set_animate (EWebView *web_view,
                         gboolean animate)
 {
+#if 0  /* WEBKIT - XXX No equivalent property? */
 	/* XXX GtkHTML does not utilize GObject properties as well
 	 *     as it could.  This just wraps gtk_html_set_animate()
 	 *     so we can get a "notify::animate" signal. */
@@ -1817,30 +1787,24 @@ e_web_view_set_animate (EWebView *web_view,
 	gtk_html_set_animate (GTK_HTML (web_view), animate);
 
 	g_object_notify (G_OBJECT (web_view), "animate");
+#endif
 }
 
 gboolean
 e_web_view_get_caret_mode (EWebView *web_view)
 {
-	/* XXX This is just here to maintain symmetry
-	 *     with e_web_view_set_caret_mode(). */
-
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
-	return gtk_html_get_caret_mode (GTK_HTML (web_view));
+	return web_view->priv->caret_mode;
 }
 
 void
 e_web_view_set_caret_mode (EWebView *web_view,
                            gboolean caret_mode)
 {
-	/* XXX GtkHTML does not utilize GObject properties as well
-	 *     as it could.  This just wraps gtk_html_set_caret_mode()
-	 *     so we can get a "notify::caret-mode" signal. */
-
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_set_caret_mode (GTK_HTML (web_view), caret_mode);
+	web_view->priv->caret_mode = caret_mode;
 
 	g_object_notify (G_OBJECT (web_view), "caret-mode");
 }
@@ -1850,7 +1814,8 @@ e_web_view_get_copy_target_list (EWebView *web_view)
 {
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), NULL);
 
-	return web_view->priv->copy_target_list;
+	return webkit_web_view_get_copy_target_list (
+		WEBKIT_WEB_VIEW (web_view));
 }
 
 gboolean
@@ -1894,44 +1859,40 @@ e_web_view_set_disable_save_to_disk (EWebView *web_view,
 gboolean
 e_web_view_get_editable (EWebView *web_view)
 {
-	/* XXX This is just here to maintain symmetry
-	 *     with e_web_view_set_editable(). */
-
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
-	return gtk_html_get_editable (GTK_HTML (web_view));
+	return webkit_web_view_get_editable (WEBKIT_WEB_VIEW (web_view));
 }
 
 void
 e_web_view_set_editable (EWebView *web_view,
                          gboolean editable)
 {
-	/* XXX GtkHTML does not utilize GObject properties as well
-	 *     as it could.  This just wraps gtk_html_set_editable()
-	 *     so we can get a "notify::editable" signal. */
-
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_set_editable (GTK_HTML (web_view), editable);
-
-	g_object_notify (G_OBJECT (web_view), "editable");
+	webkit_web_view_set_editable (WEBKIT_WEB_VIEW (web_view), editable);
 }
 
 gboolean
 e_web_view_get_inline_spelling (EWebView *web_view)
 {
+#if 0  /* WEBKIT - XXX No equivalent property? */
 	/* XXX This is just here to maintain symmetry
 	 *     with e_web_view_set_inline_spelling(). */
 
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
 	return gtk_html_get_inline_spelling (GTK_HTML (web_view));
+#endif
+
+	return FALSE;
 }
 
 void
 e_web_view_set_inline_spelling (EWebView *web_view,
                                 gboolean inline_spelling)
 {
+#if 0  /* WEBKIT - XXX No equivalent property? */
 	/* XXX GtkHTML does not utilize GObject properties as well
 	 *     as it could.  This just wraps gtk_html_set_inline_spelling()
 	 *     so we get a "notify::inline-spelling" signal. */
@@ -1941,23 +1902,29 @@ e_web_view_set_inline_spelling (EWebView *web_view,
 	gtk_html_set_inline_spelling (GTK_HTML (web_view), inline_spelling);
 
 	g_object_notify (G_OBJECT (web_view), "inline-spelling");
+#endif
 }
 
 gboolean
 e_web_view_get_magic_links (EWebView *web_view)
 {
+#if 0  /* WEBKIT - XXX No equivalent property? */
 	/* XXX This is just here to maintain symmetry
 	 *     with e_web_view_set_magic_links(). */
 
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
 	return gtk_html_get_magic_links (GTK_HTML (web_view));
+#endif
+
+	return FALSE;
 }
 
 void
 e_web_view_set_magic_links (EWebView *web_view,
                             gboolean magic_links)
 {
+#if 0  /* WEBKIT - XXX No equivalent property? */
 	/* XXX GtkHTML does not utilize GObject properties as well
 	 *     as it could.  This just wraps gtk_html_set_magic_links()
 	 *     so we can get a "notify::magic-links" signal. */
@@ -1967,23 +1934,29 @@ e_web_view_set_magic_links (EWebView *web_view,
 	gtk_html_set_magic_links (GTK_HTML (web_view), magic_links);
 
 	g_object_notify (G_OBJECT (web_view), "magic-links");
+#endif
 }
 
 gboolean
 e_web_view_get_magic_smileys (EWebView *web_view)
 {
+#if 0  /* WEBKIT - No equivalent property? */
 	/* XXX This is just here to maintain symmetry
 	 *     with e_web_view_set_magic_smileys(). */
 
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
 	return gtk_html_get_magic_smileys (GTK_HTML (web_view));
+#endif
+
+	return FALSE;
 }
 
 void
 e_web_view_set_magic_smileys (EWebView *web_view,
                               gboolean magic_smileys)
 {
+#if 0  /* WEBKIT - No equivalent property? */
 	/* XXX GtkHTML does not utilize GObject properties as well
 	 *     as it could.  This just wraps gtk_html_set_magic_smileys()
 	 *     so we can get a "notify::magic-smileys" signal. */
@@ -1993,6 +1966,7 @@ e_web_view_set_magic_smileys (EWebView *web_view,
 	gtk_html_set_magic_smileys (GTK_HTML (web_view), magic_smileys);
 
 	g_object_notify (G_OBJECT (web_view), "magic-smileys");
+#endif
 }
 
 const gchar *
@@ -2092,7 +2066,8 @@ e_web_view_get_paste_target_list (EWebView *web_view)
 {
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), NULL);
 
-	return web_view->priv->paste_target_list;
+	return webkit_web_view_get_paste_target_list (
+		WEBKIT_WEB_VIEW (web_view));
 }
 
 GtkAction *
@@ -2179,20 +2154,16 @@ e_web_view_get_action_group (EWebView *web_view,
 
 gchar *
 e_web_view_extract_uri (EWebView *web_view,
-                        GdkEventButton *event,
-                        GtkHTML *frame)
+                        GdkEventButton *event)
 {
 	EWebViewClass *class;
 
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), NULL);
 
-	if (frame == NULL)
-		frame = GTK_HTML (web_view);
-
 	class = E_WEB_VIEW_GET_CLASS (web_view);
 	g_return_val_if_fail (class->extract_uri != NULL, NULL);
 
-	return class->extract_uri (web_view, event, frame);
+	return class->extract_uri (web_view, event);
 }
 
 void
@@ -2200,7 +2171,7 @@ e_web_view_copy_clipboard (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	g_signal_emit (web_view, signals[COPY_CLIPBOARD], 0);
+	webkit_web_view_copy_clipboard (WEBKIT_WEB_VIEW (web_view));
 }
 
 void
@@ -2208,7 +2179,7 @@ e_web_view_cut_clipboard (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	g_signal_emit (web_view, signals[CUT_CLIPBOARD], 0);
+	webkit_web_view_cut_clipboard (WEBKIT_WEB_VIEW (web_view));
 }
 
 gboolean
@@ -2216,7 +2187,7 @@ e_web_view_is_selection_active (EWebView *web_view)
 {
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
-	return gtk_html_command (GTK_HTML (web_view), "is-selection-active");
+	return webkit_web_view_has_selection (WEBKIT_WEB_VIEW (web_view));
 }
 
 void
@@ -2224,7 +2195,7 @@ e_web_view_paste_clipboard (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	g_signal_emit (web_view, signals[PASTE_CLIPBOARD], 0);
+	webkit_web_view_paste_clipboard (WEBKIT_WEB_VIEW (web_view));
 }
 
 gboolean
@@ -2232,7 +2203,10 @@ e_web_view_scroll_forward (EWebView *web_view)
 {
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
-	return gtk_html_command (GTK_HTML (web_view), "scroll-forward");
+	webkit_web_view_move_cursor (
+		WEBKIT_WEB_VIEW (web_view), GTK_MOVEMENT_PAGES, 1);
+
+	return TRUE;  /* XXX This means nothing. */
 }
 
 gboolean
@@ -2240,7 +2214,10 @@ e_web_view_scroll_backward (EWebView *web_view)
 {
 	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), FALSE);
 
-	return gtk_html_command (GTK_HTML (web_view), "scroll-backward");
+	webkit_web_view_move_cursor (
+		WEBKIT_WEB_VIEW (web_view), GTK_MOVEMENT_PAGES, -1);
+
+	return TRUE;  /* XXX This means nothing. */
 }
 
 void
@@ -2248,15 +2225,17 @@ e_web_view_select_all (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_command (GTK_HTML (web_view), "select-all");
+	webkit_web_view_select_all (WEBKIT_WEB_VIEW (web_view));
 }
 
 void
 e_web_view_unselect_all (EWebView *web_view)
 {
+#if 0  /* WEBKIT */
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
 	gtk_html_command (GTK_HTML (web_view), "unselect-all");
+#endif
 }
 
 void
@@ -2264,7 +2243,7 @@ e_web_view_zoom_100 (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_command (GTK_HTML (web_view), "zoom-reset");
+	webkit_web_view_set_zoom_level (WEBKIT_WEB_VIEW (web_view), 1.0);
 }
 
 void
@@ -2272,7 +2251,7 @@ e_web_view_zoom_in (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_command (GTK_HTML (web_view), "zoom-in");
+	webkit_web_view_zoom_in (WEBKIT_WEB_VIEW (web_view));
 }
 
 void
@@ -2280,7 +2259,7 @@ e_web_view_zoom_out (EWebView *web_view)
 {
 	g_return_if_fail (E_IS_WEB_VIEW (web_view));
 
-	gtk_html_command (GTK_HTML (web_view), "zoom-out");
+	webkit_web_view_zoom_out (WEBKIT_WEB_VIEW (web_view));
 }
 
 GtkUIManager *

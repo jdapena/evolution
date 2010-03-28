@@ -34,6 +34,7 @@ SUBDIRS = \
 	plugin-manager \
 	spamassassin \
 	startup-wizard \
+	web-inspector \
 	$(MONO_DIR) \
 	$(PYTHON_DIR) \
 	$(ONLINE_ACCOUNTS_DIR) \
