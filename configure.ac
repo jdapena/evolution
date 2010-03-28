@@ -1692,6 +1692,7 @@ modules/plugin-mono/Makefile
 modules/plugin-python/Makefile
 modules/spamassassin/Makefile
 modules/startup-wizard/Makefile
+modules/web-inspector/Makefile
 modules/windows-sens/Makefile
 plugins/Makefile
 plugins/addressbook-file/Makefile

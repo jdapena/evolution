@@ -39,9 +39,6 @@
 
 #include <string.h>
 #include <glib/gi18n.h>
-#include <gtkhtml/gtkhtml.h>
-#include <gtkhtml/gtkhtml-stream.h>
-#include <gtkhtml/gtkhtml-embedded.h>
 
 #define TEXT_IS_RIGHT_TO_LEFT \
 	(gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL)
@@ -296,8 +293,10 @@ accum_name_value (GString *buffer,
 			buffer, "<td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\">");
 		if (icon != NULL)
 			g_string_append_printf (
-				buffer, "<img width=\"16\" height=\"16\" "
-				"src=\"evo-icon:%s\"></td></tr>", icon);
+				buffer,
+				"<object width=\"16\" height=\"16\" "
+				"type=\"image/x-themed-icon\" "
+				"data=\"%s\"/></td></tr>", icon);
 		else
 			g_string_append_printf (buffer, "</td></tr>");
 	} else {
@@ -305,8 +304,10 @@ accum_name_value (GString *buffer,
 			buffer, "<tr><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\">");
 		if (icon != NULL)
 			g_string_append_printf (
-				buffer, "<img width=\"16\" height=\"16\" "
-				"src=\"evo-icon:%s\">", icon);
+				buffer,
+				"<object width=\"16\" height=\"16\" "
+				"type=\"image/x-themed-icon\" "
+				"data=\"%s\"/>", icon);
 		g_string_append_printf (
 			buffer, "</td><td valign=\"top\" width=\"100\" nowrap>"
 			"<font color=" HEADER_COLOR ">%s:</font>"
@@ -426,14 +427,20 @@ render_title_block (GString *buffer,
 		photo = e_contact_get (contact, E_CONTACT_LOGO);
 	/* Only handle inlined photos for now */
 	if (photo && photo->type == E_CONTACT_PHOTO_TYPE_INLINED) {
-		g_string_append (buffer, "<img border=\"1\" src=\"internal-contact-photo:\">");
+		g_string_append (
+			buffer,
+			"<object border=\"1\" "
+			"type=\"image/x-contact-photo\"/>");
 	}
 	if (photo)
 		e_contact_photo_free (photo);
 
 	if (e_contact_get (contact, E_CONTACT_IS_LIST))
-		g_string_append (buffer, "<img src=\"evo-icon:" CONTACT_LIST_ICON "\">");
-
+		g_string_append (
+			buffer, 
+			"<object width=\"16\" height=\"16\" "
+			"type=\"image/x-themed-icon\" "
+			"data=\"" CONTACT_LIST_ICON "\"/>");
 	g_string_append_printf (
 		buffer, "</td><td width=\"20\"></td><td %s valign=\"top\">\n",
 		TEXT_IS_RIGHT_TO_LEFT ? "align=\"right\"" : "");
@@ -954,7 +961,8 @@ eab_contact_display_render_compact (EABContactDisplay *display,
 			g_object_unref (pixbuf);
 			g_string_append_printf (
 				buffer,
-				"<img width=\"%d\" height=\"%d\" src=\"internal-contact-photo:\">",
+				"<object width=\"%d\" height=\"%d\" "
+				"type=\"image/x-contact-photo\"/>",
 				calced_width, calced_height);
 			e_contact_photo_free (photo);
 		}
@@ -1152,6 +1160,7 @@ contact_display_dispose (GObject *object)
 	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
+#if 0  /* WEBKIT */
 static void
 contact_display_url_requested (GtkHTML *html,
                                const gchar *uri,
@@ -1218,6 +1227,48 @@ contact_display_url_requested (GtkHTML *html,
 
 	/* Chain up to parent's uri_requested() method. */
 	class->url_requested (html, uri, handle);
+}
+#endif
+
+static GtkWidget *
+contact_display_create_plugin_widget (EWebView *web_view,
+                                      const gchar *mime_type,
+                                      const gchar *uri,
+                                      GHashTable *param)
+{
+	EWebViewClass *web_view_class;
+	EABContactDisplay *display;
+
+	display = EAB_CONTACT_DISPLAY (web_view);
+
+	if (g_strcmp0 (mime_type, "image/x-contact-photo") == 0) {
+		EContactPhoto *photo;
+		EContact *contact;
+		GdkPixbuf *pixbuf;
+		GdkPixbufLoader *loader;
+		GtkWidget *widget = NULL;
+
+		contact = eab_contact_display_get_contact (display);
+		photo = e_contact_get (contact, E_CONTACT_PHOTO);
+		if (photo == NULL)
+			photo = e_contact_get (contact, E_CONTACT_LOGO);
+
+		loader = gdk_pixbuf_loader_new ();
+		gdk_pixbuf_loader_write (
+			loader, photo->data.inlined.data,
+			photo->data.inlined.length, NULL);
+		gdk_pixbuf_loader_close (loader, NULL);
+		pixbuf = gdk_pixbuf_loader_get_pixbuf (loader);
+		if (pixbuf != NULL)
+			widget = gtk_image_new_from_pixbuf (pixbuf);
+		g_object_unref (loader);
+
+		return widget;
+	}
+
+	/* Chain up to parent's create_plugin_widget() method. */
+	web_view_class = E_WEB_VIEW_CLASS (parent_class);
+	return web_view_class->create_plugin_widget (web_view, mime_type, uri, param);
 }
 
 static void
@@ -1377,7 +1428,9 @@ static void
 eab_contact_display_class_init (EABContactDisplayClass *class)
 {
 	GObjectClass *object_class;
+#if 0  /* WEBKIT */
 	GtkHTMLClass *html_class;
+#endif
 	EWebViewClass *web_view_class;
 
 	parent_class = g_type_class_peek_parent (class);
@@ -1388,10 +1441,13 @@ eab_contact_display_class_init (EABContactDisplayClass *class)
 	object_class->get_property = contact_display_get_property;
 	object_class->dispose = contact_display_dispose;
 
+#if 0  /* WEBKIT */
 	html_class = GTK_HTML_CLASS (class);
 	html_class->url_requested = contact_display_url_requested;
+#endif
 
 	web_view_class = E_WEB_VIEW_CLASS (class);
+	web_view_class->create_plugin_widget = contact_display_create_plugin_widget;
 	web_view_class->hovering_over_link = contact_display_hovering_over_link;
 	web_view_class->link_clicked = contact_display_link_clicked;
 	web_view_class->update_actions = contact_display_update_actions;
