@@ -119,9 +119,7 @@ enum {
 	PROP_HEADERS_COLLAPSABLE
 };
 
-static void efh_url_requested (GtkHTML *html, const gchar *url, GtkHTMLStream *handle, EMFormatHTML *efh);
-static gboolean efh_object_requested (GtkHTML *html, GtkHTMLEmbedded *eb, EMFormatHTML *efh);
-static void efh_gtkhtml_destroy (GtkHTML *html, EMFormatHTML *efh);
+static void efh_gtkhtml_destroy(GtkHTML *html, EMFormatHTML *efh);
 
 static void	efh_format_message		(EMFormat *emf,
 						 CamelStream *stream,
@@ -1024,6 +1022,7 @@ efh_init (EMFormatHTML *efh,
 	web_view = g_object_new (class->html_widget_type, NULL);
 	efh->priv->web_view = g_object_ref_sink (web_view);
 
+#if 0  /* WEBKIT */
 	gtk_html_set_blocking (GTK_HTML (web_view), FALSE);
 	gtk_html_set_caret_first_focus_anchor (
 		GTK_HTML (web_view), EFM_MESSAGE_START_ANAME);
@@ -1032,11 +1031,9 @@ efh_init (EMFormatHTML *efh,
 	e_web_view_set_editable (web_view, FALSE);
 
 	g_signal_connect (
-		web_view, "url-requested",
-		G_CALLBACK (efh_url_requested), efh);
-	g_signal_connect (
 		web_view, "object-requested",
 		G_CALLBACK (efh_object_requested), efh);
+#endif
 
 	color = &efh->priv->colors[EM_FORMAT_HTML_COLOR_BODY];
 	gdk_color_parse ("#eeeeee", color);
@@ -1500,229 +1497,7 @@ em_format_html_job_queue (EMFormatHTML *emfh,
 
 /* ********************************************************************** */
 
-static void
-emfh_getpuri (struct _EMFormatHTMLJob *job,
-              GCancellable *cancellable)
-{
-	d(printf(" running getpuri task\n"));
-	if (!g_cancellable_is_cancelled (cancellable))
-		job->u.puri->func (
-			EM_FORMAT (job->format), job->stream,
-			job->u.puri, cancellable);
-}
-
-static void
-emfh_configure_stream_for_proxy (CamelHttpStream *stream,
-                                 const gchar *uri)
-{
-	EProxy *proxy;
-	SoupURI *proxy_uri;
-	gchar *basic;
-	gchar *basic64;
-	const gchar *user = "";
-	const gchar *password = "";
-
-	proxy = em_utils_get_proxy ();
-
-	if (!e_proxy_require_proxy_for_uri (proxy, uri))
-		return;
-
-	proxy_uri = e_proxy_peek_uri_for (proxy, uri);
-
-	if (proxy_uri == NULL)
-		return;
-
-	if (proxy_uri->user != NULL)
-		user = proxy_uri->user;
-
-	if (proxy_uri->password != NULL)
-		password = proxy_uri->password;
-
-	if (*user == '\0' && *password == '\0')
-		return;
-
-	basic = g_strdup_printf ("%s:%s", user, password);
-	basic64 = g_base64_encode ((guchar *) basic, strlen (basic));
-	camel_http_stream_set_proxy_authpass (stream, basic64);
-	g_free (basic64);
-	g_free (basic);
-}
-
-static void
-emfh_gethttp (struct _EMFormatHTMLJob *job,
-              GCancellable *cancellable)
-{
-	CamelStream *cistream = NULL, *costream = NULL, *instream = NULL;
-	CamelURL *url;
-	CamelContentType *content_type;
-	CamelHttpStream *tmp_stream;
-	gssize n, total = 0, pc_complete = 0, nread = 0;
-	gchar buffer[1500];
-	const gchar *length;
-
-	if (g_cancellable_is_cancelled (cancellable)
-	    || (url = camel_url_new (job->u.uri, NULL)) == NULL)
-		goto badurl;
-
-	d(printf(" running load uri task: %s\n", job->u.uri));
-
-	if (emfh_http_cache)
-		instream = cistream = camel_data_cache_get (emfh_http_cache, EMFH_HTTP_CACHE_PATH, job->u.uri, NULL);
-
-	if (instream == NULL) {
-		EMailImageLoadingPolicy policy;
-
-		policy = em_format_html_get_image_loading_policy (job->format);
-
-		if (!(job->format->priv->load_images_now
-		      || policy == E_MAIL_IMAGE_LOADING_POLICY_ALWAYS
-		      || (policy == E_MAIL_IMAGE_LOADING_POLICY_SOMETIMES
-			  && em_utils_in_addressbook ((CamelInternetAddress *) camel_mime_message_get_from (job->format->parent.message), FALSE)))) {
-			/* TODO: Ideally we would put the http requests into
-			 * another queue and only send them out if the user
-			 * selects 'load images', when they do.  The problem
-			 * is how to maintain this state with multiple
-			 * renderings, and how to adjust the thread
-			 * dispatch/setup routine to handle it */
-			camel_url_free (url);
-			goto done;
-		}
-
-		instream = camel_http_stream_new (CAMEL_HTTP_METHOD_GET, ((EMFormat *) job->format)->session, url);
-		camel_http_stream_set_user_agent((CamelHttpStream *) instream, "CamelHttpStream/1.0 Evolution/" VERSION);
-		emfh_configure_stream_for_proxy ((CamelHttpStream *) instream, job->u.uri);
-
-		camel_operation_push_message (
-			cancellable, _("Retrieving '%s'"), job->u.uri);
-		tmp_stream = (CamelHttpStream *) instream;
-		content_type = camel_http_stream_get_content_type (tmp_stream);
-		length = camel_header_raw_find(&tmp_stream->headers, "Content-Length", NULL);
-		d(printf("  Content-Length: %s\n", length));
-		if (length != NULL)
-			total = atoi (length);
-		camel_content_type_unref (content_type);
-	} else
-		camel_operation_push_message (
-			cancellable, _("Retrieving '%s'"), job->u.uri);
-
-	camel_url_free (url);
-
-	if (instream == NULL)
-		goto done;
-
-	if (emfh_http_cache != NULL && cistream == NULL)
-		costream = camel_data_cache_add (emfh_http_cache, EMFH_HTTP_CACHE_PATH, job->u.uri, NULL);
-
-	do {
-		if (camel_operation_cancel_check (CAMEL_OPERATION (cancellable))) {
-			n = -1;
-			break;
-		}
-		/* FIXME: progress reporting in percentage, can we get the length always?  do we care? */
-		n = camel_stream_read (instream, buffer, sizeof (buffer), cancellable, NULL);
-		if (n > 0) {
-			nread += n;
-			/* If we didn't get a valid Content-Length header, do not try to calculate percentage */
-			if (total != 0) {
-				pc_complete = ((nread * 100) / total);
-				camel_operation_progress (cancellable, pc_complete);
-			}
-			d(printf("  read %d bytes\n", n));
-			if (costream && camel_stream_write (costream, buffer, n, cancellable, NULL) == -1) {
-				n = -1;
-				break;
-			}
-
-			camel_stream_write (job->stream, buffer, n, cancellable, NULL);
-		}
-	} while (n > 0);
-
-	/* indicates success */
-	if (n == 0)
-		camel_stream_close (job->stream, cancellable, NULL);
-
-	if (costream) {
-		/* do not store broken files in a cache */
-		if (n != 0)
-			camel_data_cache_remove (emfh_http_cache, EMFH_HTTP_CACHE_PATH, job->u.uri, NULL);
-		g_object_unref (costream);
-	}
-
-	g_object_unref (instream);
-done:
-	camel_operation_pop_message (cancellable);
-badurl:
-	g_free (job->u.uri);
-}
-
-/* ********************************************************************** */
-
-static void
-efh_url_requested (GtkHTML *html,
-                   const gchar *url,
-                   GtkHTMLStream *handle,
-                   EMFormatHTML *efh)
-{
-	EMFormatPURI *puri;
-	struct _EMFormatHTMLJob *job = NULL;
-
-	d(printf("url requested, html = %p, url '%s'\n", html, url));
-
-	puri = em_format_find_visible_puri ((EMFormat *) efh, url);
-	if (puri) {
-		CamelDataWrapper *dw = camel_medium_get_content ((CamelMedium *) puri->part);
-		CamelContentType *ct = dw ? dw->mime_type : NULL;
-
-		/* GtkHTML only handles text and images.
-		 * application/octet-stream parts are the only ones
-		 * which are snooped for other content.  So only try
-		 * to pass these to it - any other types are badly
-		 * formed or intentionally malicious emails.  They
-		 * will still show as attachments anyway */
-
-		if (ct && (camel_content_type_is(ct, "text", "*")
-			   || camel_content_type_is(ct, "image", "*")
-			   || camel_content_type_is(ct, "application", "octet-stream"))) {
-			puri->use_count++;
-
-			d(printf(" adding puri job\n"));
-			job = em_format_html_job_new (efh, emfh_getpuri, puri);
-		} else {
-			d(printf(" part is unknown type '%s', not using\n", ct?camel_content_type_format(ct):"<unset>"));
-			gtk_html_stream_close (handle, GTK_HTML_STREAM_ERROR);
-		}
-	} else if (g_ascii_strncasecmp(url, "http:", 5) == 0 || g_ascii_strncasecmp(url, "https:", 6) == 0) {
-		d(printf(" adding job, get %s\n", url));
-		job = em_format_html_job_new (efh, emfh_gethttp, g_strdup (url));
-	} else if  (g_str_has_prefix (url, "file://")) {
-		gchar *data = NULL;
-		gsize length = 0;
-		gboolean status;
-		gchar *path;
-
-		path = g_filename_from_uri (url, NULL, NULL);
-		g_return_if_fail (path != NULL);
-
-		status = g_file_get_contents (path, &data, &length, NULL);
-		if (status)
-			gtk_html_stream_write (handle, data, length);
-
-		gtk_html_stream_close (handle, status ? GTK_HTML_STREAM_OK : GTK_HTML_STREAM_ERROR);
-		g_free (data);
-		g_free (path);
-	} else {
-		d(printf("HTML Includes reference to unknown uri '%s'\n", url));
-		gtk_html_stream_close (handle, GTK_HTML_STREAM_ERROR);
-	}
-
-	if (job) {
-		job->stream = em_html_stream_new (html, handle);
-		em_format_html_job_queue (efh, job);
-	}
-
-	g_signal_stop_emission_by_name (html, "url-requested");
-}
-
+#if 0  /* WEBKIT */
 static gboolean
 efh_object_requested (GtkHTML *html,
                       GtkHTMLEmbedded *eb,
@@ -1746,6 +1521,7 @@ efh_object_requested (GtkHTML *html,
 
 	return res;
 }
+#endif
 
 /* ********************************************************************** */
 #include "em-format/em-inline-filter.h"
