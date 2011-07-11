@@ -1,0 +1,18 @@
+body, td, th {
+  font-size: 0.8em;
+}
+
+h1, h2, h3 {
+  color: #7f7f7f;
+}
+
+th {
+  color: #7f7f7f;
+  text-align: left;
+  font-weight: normal;
+  vertical-align: top;
+}
+
+.header {
+  color: #7f7f7f;
+}
