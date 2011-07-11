@@ -10,6 +10,7 @@ libeabwidgets_la_CPPFLAGS =				\
 	-DEVOLUTION_GALVIEWSDIR=\""$(viewsdir)"\"	\
 	-DEVOLUTION_RULEDIR=\"$(ruledir)\"		\
 	-DEVOLUTION_IMAGESDIR=\"${imagesdir}\"		\
+	-DEVOLUTION_DATADIR=\"${datadir}\"		\
 	-I$(top_srcdir)					\
 	-I$(top_srcdir)/filter				\
 	-I$(top_srcdir)/widgets				\
