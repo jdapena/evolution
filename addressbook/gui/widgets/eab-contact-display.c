@@ -72,7 +72,6 @@ common_location[] =
 	{ "OTHER", N_ ("Other") }
 };
 
-#define HEADER_COLOR      "#7f7f7f"
 #define IMAGE_COL_WIDTH   "20"
 #define CONTACT_LIST_ICON "stock_contact-list"
 #define AIM_ICON          "im-aim"
@@ -90,7 +89,7 @@ common_location[] =
 
 #define HTML_HEADER "<!doctype html public \"-//W3C//DTD HTML 4.0 TRANSITIONAL//EN\">\n<html>\n"  \
                     "<head>\n<meta name=\"generator\" content=\"Evolution Addressbook Component\">\n" \
-                    "<style type=\"text/css\" rel=\"Stylesheet\" ref=\"file://" EVOLUTION_DATADIR "/evo_style.css\">" \
+                    "<link type=\"text/css\" rel=\"stylesheet\" href=\"file://" EVOLUTION_PRIVDATADIR "/theme/webview.css\">" \
                     "<style type=\"text/css\">\n" \
 		    "  div#header { width:100%; clear: both; }\n" \
 		    "  div#columns { width: 100%; clear: both; }\n" \
@@ -98,9 +97,6 @@ common_location[] =
 		    "  div.column { width: auto; float: left; margin-right: 15px; }\n" \
 		    "  img#contact-photo { float: left; }\n" \
 		    "  div#contact-name { float: left; margin-left: 20px; }\n" \
-		    "  h2 { color: " HEADER_COLOR "; }\n" \
-		    "  table th { color: " HEADER_COLOR "; text-align: left; }\n" \
-		    "  .type { color: " HEADER_COLOR "; }\n" \
 		    "</style>\n" \
 		    "<script type=\"text/javascript\">\n" \
 		    "function collapse_list (obj, listId) {\n" \
@@ -285,9 +281,9 @@ accum_address (GString *buffer,
 		gchar *html = e_text_to_html (label, E_TEXT_TO_HTML_CONVERT_NL);
 
 		if (TEXT_IS_RIGHT_TO_LEFT)
-			g_string_append_printf (buffer, "<tr><td align=\"right\" valign=\"top\" nowrap>%s</td><td valign=\"top\" width=\"100\" align=\"right\" nowrap><font color=" HEADER_COLOR ">%s:</font>%s</td><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\"></td></tr>", html, html_label, map_link->str);
+			g_string_append_printf (buffer, "<tr><td align=\"right\" valign=\"top\" nowrap>%s</td><th>%s:<br>%s</th><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\"></td></tr>", html, html_label, map_link->str);
 		else
-			g_string_append_printf (buffer, "<tr><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\"></td><td valign=\"top\" width=\"100\" nowrap><font color=" HEADER_COLOR ">%s:</font>%s</td><td valign=\"top\" nowrap>%s</td></tr>", html_label, map_link->str, html);
+			g_string_append_printf (buffer, "<tr><td width=\"" IMAGE_COL_WIDTH "\"></td><th>%s:<br>%s</th><td valign=\"top\" nowrap>%s</td></tr>", html_label, map_link->str, html);
 
 		g_free (html);
 		g_string_free (map_link, TRUE);
@@ -300,7 +296,7 @@ accum_address (GString *buffer,
 		if (TEXT_IS_RIGHT_TO_LEFT)
 			g_string_append_printf (buffer, "<tr><td align=\"right\" valign=\"top\" nowrap>");
 		else
-			g_string_append_printf (buffer, "<tr><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\"></td><td valign=\"top\" width=\"100\"><font color=" HEADER_COLOR ">%s:</font>%s</td><td valign=\"top\" nowrap>", html_label, map_link->str);
+			g_string_append_printf (buffer, "<tr><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\"></td><th>%s:<br>%s</th><td valign=\"top\" nowrap>", html_label, map_link->str);
 
 		if (adr->po && *adr->po) g_string_append_printf (buffer, "%s<br>", adr->po);
 		if (adr->ext && *adr->ext) g_string_append_printf (buffer, "%s<br>", adr->ext);
@@ -311,7 +307,7 @@ accum_address (GString *buffer,
 		if (adr->country && *adr->country) g_string_append_printf (buffer, "%s<br>", adr->country);
 
 		if (TEXT_IS_RIGHT_TO_LEFT)
-			g_string_append_printf (buffer, "</td><td valign=\"top\" width=\"100\" align=\"right\"><font color=" HEADER_COLOR ">%s:</font>%s</td><td valign=\"top\" width=\"" IMAGE_COL_WIDTH "\"></td></tr>", html_label, map_link->str);
+			g_string_append_printf (buffer, "</td><th%s:<br>%s</th><td width=\"" IMAGE_COL_WIDTH "\"></td></tr>", html_label, map_link->str);
 		else
 			g_string_append_printf (buffer, "</td></tr>");
 	}
@@ -567,7 +563,7 @@ render_contact_list (GString *buffer,
 
 	render_title_block (buffer, contact);
 
-	g_string_append_printf (buffer, "<table border=\"0\"><tr><td colspan=\"2\" valign=\"top\"><font color=" HEADER_COLOR ">%s</font></td></tr>"
+	g_string_append_printf (buffer, "<table border=\"0\"><tr><th colspan=\"2\">%s</th></tr>"
 		"<tr><td with=" IMAGE_COL_WIDTH "></td><td>", _("List Members:"));
 	g_string_append (buffer, "<table border=\"0\" cellspacing=\"1\">");
 
@@ -602,7 +598,7 @@ render_contact_column (GString *buffer,
 		if (!eab_parse_qp_email (l->data, &name, &mail))
 			mail = e_text_to_html (l->data, 0);
 
-		g_string_append_printf (email, "%s%s%s<a href=\"internal-mailto:%d\">%s</a>%s <span class=\"type\">(%s)</span>",
+		g_string_append_printf (email, "%s%s%s<a href=\"internal-mailto:%d\">%s</a>%s <span class=\"header\">(%s)</span>",
 						nl,
 						name ? name : "",
 						name ? " &lt;" : "",
@@ -668,7 +664,7 @@ render_work_column (GString *buffer,
 	if (accum->len > 0) {
 		g_string_append_printf (buffer,
 			"<div class=\"column\" id=\"contact-work\">"
-			"<h2>%s</h2>"
+			"<h3>%s</h3>"
 			"<table border=\"0\" cellspacing=\"5\">%s</table>"
 			"</div>", _("Work"), accum->str);
 	}
@@ -695,7 +691,7 @@ render_personal_column (GString *buffer,
 	if (accum->len > 0) {
 		g_string_append_printf (buffer,
 			"<div class=\"column\" id=\"contact-personal\">"
-			"<h2>%s</h2>"
+			"<h3>%s</h3>"
 			"<table border=\"0\" cellspacing=\"5\">%s</table>"
 			"</div>", _("Personal"), accum->str);
 	}
