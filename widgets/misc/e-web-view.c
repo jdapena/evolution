@@ -1063,7 +1063,7 @@ web_view_load_string (EWebView *web_view,
 
 	webkit_web_view_load_string (
 		WEBKIT_WEB_VIEW (web_view),
-		string, "text/html", "UTF-8", NULL);
+		string, "text/html", "UTF-8", "file://");
 }
 
 static gboolean
