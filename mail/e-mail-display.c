@@ -215,22 +215,6 @@ mail_display_style_set (GtkWidget *widget,
 }
 
 static void
-mail_display_load_string (EWebView *web_view,
-                          const gchar *string)
-{
-	EMailDisplayPrivate *priv;
-
-	priv = E_MAIL_DISPLAY (web_view)->priv;
-	g_return_if_fail (priv->formatter != NULL);
-
-	if (em_format_busy (EM_FORMAT (priv->formatter)))
-		return;
-
-	/* Chain up to parent's load_string() method. */
-	E_WEB_VIEW_CLASS (parent_class)->load_string (web_view, string);
-}
-
-static void
 mail_display_url_requested (GtkHTML *html,
                             const gchar *uri,
                             GtkHTMLStream *stream)
@@ -356,7 +340,6 @@ mail_display_class_init (EMailDisplayClass *class)
 	widget_class->style_set = mail_display_style_set;
 
 	web_view_class = E_WEB_VIEW_CLASS (class);
-	web_view_class->load_string = mail_display_load_string;
 	web_view_class->process_mailto = mail_display_process_mailto;
 
 	html_class = GTK_HTML_CLASS (class);

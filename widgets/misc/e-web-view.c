@@ -22,6 +22,8 @@
 
 #include "e-web-view.h"
 
+#include <JavaScriptCore/JavaScript.h>
+
 #include <string.h>
 #include <glib/gi18n-lib.h>
 
@@ -1066,6 +1068,56 @@ web_view_load_string (EWebView *web_view,
 		string, "text/html", "UTF-8", "file://");
 }
 
+static void
+web_view_load_uri (EWebView *web_view,
+		   const gchar *uri)
+{
+	if (uri == NULL)
+		uri = "about:blank";
+
+	webkit_web_view_load_uri (
+		WEBKIT_WEB_VIEW (web_view), uri);
+}
+
+static void
+web_view_frame_load_string (EWebView *web_view,
+			    const gchar *frame_name,
+			    const gchar *string)
+{
+	WebKitWebFrame *main_frame, *frame;
+
+	if (string == NULL)
+		string = "";
+
+	main_frame = webkit_web_view_get_main_frame (WEBKIT_WEB_VIEW (web_view));
+	if (main_frame) {
+		frame = webkit_web_frame_find_frame (main_frame, frame_name);
+
+		if (frame)
+			webkit_web_frame_load_string (
+				frame, string, "text/html", "UTF-8", "file://");
+	}
+}
+
+static void
+web_view_frame_load_uri (EWebView *web_view,
+			 const gchar *frame_name,
+			 const gchar *uri)
+{
+	WebKitWebFrame *main_frame, *frame;
+
+	if (uri == NULL)
+		uri = "about:blank";
+
+	main_frame = webkit_web_view_get_main_frame (WEBKIT_WEB_VIEW (web_view));
+	if (main_frame) {
+		frame = webkit_web_frame_find_frame (main_frame, frame_name);
+
+		if (frame)
+			webkit_web_frame_load_uri (frame, uri);
+	}
+}
+
 static gboolean
 web_view_popup_event (EWebView *web_view,
                       GdkEventButton *event,
@@ -1366,6 +1418,9 @@ e_web_view_class_init (EWebViewClass *class)
 	class->hovering_over_link = web_view_hovering_over_link;
 	class->link_clicked = web_view_link_clicked;
 	class->load_string = web_view_load_string;
+	class->load_uri = web_view_load_uri;
+	class->frame_load_string = web_view_frame_load_string;
+	class->frame_load_uri = web_view_frame_load_uri;
 	class->popup_event = web_view_popup_event;
 	class->stop_loading = web_view_stop_loading;
 	class->update_actions = web_view_update_actions;
@@ -1756,6 +1811,185 @@ e_web_view_load_string (EWebView *web_view,
 	g_return_if_fail (class->load_string != NULL);
 
 	class->load_string (web_view, string);
+}
+
+void
+e_web_view_load_uri (EWebView *web_view,
+		     const gchar *uri)
+{
+	EWebViewClass *class;
+
+	g_return_if_fail (E_IS_WEB_VIEW (web_view));
+
+	class = E_WEB_VIEW_GET_CLASS (web_view);
+	g_return_if_fail (class->load_uri != NULL);
+
+	class->load_uri (web_view, uri);
+}
+
+const gchar*
+e_web_view_get_uri (EWebView *web_view)
+{
+	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), NULL);
+
+	return webkit_web_view_get_uri (WEBKIT_WEB_VIEW (web_view));
+}
+
+void
+e_web_view_frame_load_string (EWebView *web_view,
+			      const gchar *frame_name,
+			      const gchar *string)
+{
+	EWebViewClass *class;
+
+	g_return_if_fail (E_IS_WEB_VIEW (web_view));
+	g_return_if_fail (frame_name != NULL);
+
+	class = E_WEB_VIEW_GET_CLASS (web_view);
+	g_return_if_fail (class->frame_load_string != NULL);
+
+	class->frame_load_string (web_view, frame_name, string);
+}
+
+void
+e_web_view_frame_load_uri (EWebView *web_view,
+			   const gchar *frame_name,
+			   const gchar *uri)
+{
+	EWebViewClass *class;
+
+	g_return_if_fail (E_IS_WEB_VIEW (web_view));
+	g_return_if_fail (frame_name != NULL);
+
+	class = E_WEB_VIEW_GET_CLASS (web_view);
+	g_return_if_fail (class->frame_load_uri != NULL);
+
+	class->frame_load_uri (web_view, frame_name, uri);
+}
+
+const gchar*
+e_web_view_frame_get_uri (EWebView *web_view,
+			  const gchar *frame_name)
+{
+	WebKitWebFrame *main_frame, *frame;
+
+	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), NULL);
+	g_return_val_if_fail (frame_name != NULL, NULL);
+
+	main_frame = webkit_web_view_get_main_frame (WEBKIT_WEB_VIEW (web_view));
+	if (main_frame) {
+		frame = webkit_web_frame_find_frame (main_frame, frame_name);
+
+		if (frame)
+			return webkit_web_frame_get_uri (frame);
+	}
+
+	return NULL;
+}
+
+gchar*
+e_web_view_get_html (EWebView *web_view)
+{
+	GValue html = {0};
+
+	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), NULL);
+
+	if (e_web_view_exec_script (web_view, "return document.documentElement.innerHTML;", &html) == G_TYPE_STRING)
+		return g_strdup (g_value_get_string (&html));
+	else
+		return NULL;
+}
+
+GType
+e_web_view_exec_script (EWebView *web_view, const gchar *script, GValue *value)
+{
+	WebKitWebFrame *main_frame;
+
+	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), G_TYPE_INVALID);
+	g_return_val_if_fail (script != NULL, G_TYPE_INVALID);
+
+	main_frame = webkit_web_view_get_main_frame (WEBKIT_WEB_VIEW (web_view));
+
+	return e_web_view_frame_exec_script (web_view,
+		webkit_web_frame_get_name (main_frame),
+		script, value);
+}
+
+GType
+e_web_view_frame_exec_script (EWebView *web_view, const gchar *frame_name, const gchar *script, GValue *value)
+{
+	WebKitWebFrame *main_frame, *frame;
+	JSGlobalContextRef context;
+	JSValueRef js_value, error = NULL;
+	JSType js_type;
+	JSStringRef js_script;
+	JSStringRef js_str;
+	size_t str_len;
+	gchar *str;
+
+	g_return_val_if_fail (E_IS_WEB_VIEW (web_view), G_TYPE_INVALID);
+	g_return_val_if_fail (script != NULL, G_TYPE_INVALID);
+
+	main_frame = webkit_web_view_get_main_frame (WEBKIT_WEB_VIEW (web_view));
+	frame = webkit_web_frame_find_frame (main_frame, frame_name);
+
+	context = webkit_web_frame_get_global_context (frame);
+
+	js_script = JSStringCreateWithUTF8CString (script);
+	js_value = JSEvaluateScript (context, js_script, NULL, NULL, 0, &error);
+	JSStringRelease (js_script);
+
+	if (error) {
+		gchar *msg;
+		js_str = JSValueToStringCopy (context, error, NULL);
+		str_len = JSStringGetLength (js_str);
+
+		msg = g_malloc (str_len + 1);
+		JSStringGetUTF8CString (js_str, msg, str_len + 1);
+		JSStringRelease (js_str);
+
+		g_message ("JavaScript Execution Failed: %s", msg);
+		g_free (msg);
+
+		return G_TYPE_INVALID;
+	}
+
+	if (!value)
+		return G_TYPE_NONE;
+
+	js_type = JSValueGetType (context, js_value);
+	switch (js_type) {
+		case kJSTypeBoolean:
+			g_value_init (value, G_TYPE_BOOLEAN);
+			g_value_set_boolean (value, JSValueToBoolean (context, js_value));
+			break;
+		case kJSTypeNumber:
+			g_value_init (value, G_TYPE_DOUBLE);
+			g_value_set_double(value, JSValueToNumber (context, js_value, NULL));
+			break;
+		case kJSTypeString:
+			js_str = JSValueToStringCopy (context, js_value, NULL);
+			str_len = JSStringGetLength (js_str);
+			str = g_malloc (str_len + 1);
+			JSStringGetUTF8CString (js_str, str, str_len + 1);
+			JSStringRelease (js_str);
+			g_value_init (value, G_TYPE_STRING);
+			g_value_set_string (value, str);
+			g_free (str);
+			break;
+		case kJSTypeObject:
+			g_value_init (value, G_TYPE_OBJECT);
+			g_value_set_object (value, JSValueToObject (context, js_value, NULL));
+			break;
+		case kJSTypeNull:
+			g_value_init (value, G_TYPE_POINTER);
+			g_value_set_pointer (value, NULL);
+			break;
+		case kJSTypeUndefined:
+			break;
+	}
+
+	return G_VALUE_TYPE (value);
 }
 
 gboolean

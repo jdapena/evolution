@@ -16,3 +16,8 @@ th {
 .header {
   color: #7f7f7f;
 }
+
+.pre {
+  font-family: monospace;
+  font-size: 0.8em;
+}

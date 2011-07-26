@@ -76,7 +76,14 @@ struct _EWebViewClass {
 						 const gchar *uri);
 	void		(*load_string)		(EWebView *web_view,
 						 const gchar *load_string);
-
+	void		(*load_uri)		(EWebView *web_view,
+						 const gchar *load_uri);
+	void		(*frame_load_string)	(EWebView *web_view,
+						 const gchar *frame_name,
+						 const gchar *string);
+	void		(*frame_load_uri)	(EWebView *web_view,
+						 const gchar *frame_name,
+						 const gchar *uri);
 	/* Signals */
 	gboolean	(*popup_event)		(EWebView *web_view,
 						 GdkEventButton *event,
@@ -94,6 +101,25 @@ GtkWidget *	e_web_view_new			(void);
 void		e_web_view_clear		(EWebView *web_view);
 void		e_web_view_load_string		(EWebView *web_view,
 						 const gchar *string);
+void		e_web_view_load_uri		(EWebView *web_view,
+						 const gchar *uri);
+const gchar*	e_web_view_get_uri		(EWebView *web_view);
+void		e_web_view_frame_load_string	(EWebView *web_view,
+						 const gchar *frame_name,
+						 const gchar *string);
+void		e_web_view_frame_load_uri	(EWebView *web_view,
+						 const gchar *frame_name,
+						 const gchar *uri);
+const gchar*	e_web_view_frame_get_uri	(EWebView *web_view,
+						 const gchar *frame_name);
+GType		e_web_view_exec_script		(EWebView *web_view,
+						 const gchar *script,
+						 GValue *value);
+GType		e_web_view_frame_exec_script	(EWebView *web_view,
+						 const gchar *frame_name,
+						 const gchar *script,
+						 GValue *value);
+gchar *		e_web_view_get_html		(EWebView *web_view);
 gboolean	e_web_view_get_animate		(EWebView *web_view);
 void		e_web_view_set_animate		(EWebView *web_view,
 						 gboolean animate);
