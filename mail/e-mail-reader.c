@@ -2662,17 +2662,25 @@ mail_reader_message_selected_timeout_cb (EMailReader *reader)
 			EMailReaderClosure *closure;
 			GCancellable *cancellable;
 			EActivity *activity;
-			gchar *string;
+			gchar *string, *html;
 
 			string = g_strdup_printf (
 				_("Retrieving message '%s'"), cursor_uid);
+
+			html = g_strdup_printf ("<html><head></head><body>"
+						"<table width=\"100%%\" height=\"100%%\"><tr>"
+						"<td valign=\"middle\" align=\"center\"><h5>%s</h5></td>"
+						"</tr></table>"
+						"</body></html>",
+						string);
 #if HAVE_CLUTTER
 			if (!e_shell_get_express_mode (e_shell_get_default ()))
-				e_web_view_load_string (web_view, string);
+				e_web_view_load_string (web_view, html);
 #else
-			e_web_view_load_string (web_view, string);
+			e_web_view_load_string (web_view, html);
 #endif
 			g_free (string);
+			g_free (html);
 
 			activity = e_mail_reader_new_activity (reader);
 			cancellable = e_activity_get_cancellable (activity);

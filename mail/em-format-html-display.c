@@ -38,9 +38,6 @@
 #undef interface
 #endif
 
-#include <gtkhtml/gtkhtml.h>
-#include <gtkhtml/gtkhtml-embedded.h>
-
 #include <glib/gi18n.h>
 
 #include <e-util/e-util.h>
@@ -109,8 +106,8 @@ static const gchar *smime_sign_colour[5] = {
 
 static void efhd_attachment_frame (EMFormat *emf, CamelStream *stream, EMFormatPURI *puri, GCancellable *cancellable);
 static void efhd_message_add_bar (EMFormat *emf, CamelStream *stream, CamelMimePart *part, const EMFormatHandler *info);
-static gboolean efhd_attachment_button (EMFormatHTML *efh, GtkHTMLEmbedded *eb, EMFormatHTMLPObject *pobject);
-static gboolean efhd_attachment_optional (EMFormatHTML *efh, GtkHTMLEmbedded *eb, EMFormatHTMLPObject *object);
+static GtkWidget* efhd_attachment_button (EMFormatHTML *efh, EMFormatHTMLPObject *pobject);
+static GtkWidget* efhd_attachment_optional (EMFormatHTML *efh, EMFormatHTMLPObject *object);
 static void efhd_free_attach_puri_data (EMFormatPURI *puri);
 
 struct _attach_puri {
@@ -122,12 +119,7 @@ struct _attach_puri {
 
 	/* for the > and V buttons */
 	GtkWidget *forward, *down;
-	/* currently no way to correlate this data to the frame :( */
-	GtkHTML *frame;
-	guint shown : 1;
-
-	/* Embedded Frame */
-	GtkHTMLEmbedded *html;
+	guint shown:1;
 
 	/* Attachment */
 	EAttachment *attachment;
@@ -352,12 +344,10 @@ efhd_xpkcs7mime_validity_clicked (GtkWidget *button,
 	gtk_widget_show (po->widget);
 }
 
-static gboolean
+static GtkWidget*
 efhd_xpkcs7mime_button (EMFormatHTML *efh,
-                        GtkHTMLEmbedded *eb,
                         EMFormatHTMLPObject *pobject)
 {
-	GtkWidget *container;
 	GtkWidget *widget;
 	struct _smime_pobject *po = (struct _smime_pobject *) pobject;
 	const gchar *icon_name;
@@ -368,23 +358,17 @@ efhd_xpkcs7mime_button (EMFormatHTML *efh,
 	else
 		icon_name = smime_encrypt_table[po->valid->encrypt.status].icon;
 
-	container = GTK_WIDGET (eb);
-
 	widget = gtk_button_new ();
 	g_signal_connect (
 		widget, "clicked",
 		G_CALLBACK (efhd_xpkcs7mime_validity_clicked), pobject);
-	gtk_container_add (GTK_CONTAINER (container), widget);
 	gtk_widget_show (widget);
-
-	container = widget;
 
 	widget = gtk_image_new_from_icon_name (
 		icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
-	gtk_container_add (GTK_CONTAINER (container), widget);
 	gtk_widget_show (widget);
 
-	return TRUE;
+	return widget;
 }
 
 static gboolean
@@ -485,7 +469,7 @@ efhd_format_attachment (EMFormat *emf,
 		"<tr><td></td><tr>"
 		"</table>"
 		"</td>"
-		"<td><object classid=\"%s\"></object></td>"
+		"<td><object data=\"%s\" type=\"application/x-gtk-widget\"></object></td>"
 		"<td><table width=3 cellspacing=0 cellpadding=0>"
 		"<tr><td></td></tr>"
 		"</table></td>"
@@ -577,7 +561,7 @@ efhd_format_optional (EMFormat *emf,
 		buffer,
 		"</font></h3></td></tr></table>\n"
 		"<table cellspacing=0 cellpadding=0><tr>"
-		"<td><object classid=\"%s\"></object>"
+		"<td><object data=\"%s\" type=\"application/x-gtk-widget\"></object>"
 		"</td></tr></table>" EM_FORMAT_HTML_VPAD,
 		classid);
 
@@ -626,7 +610,7 @@ efhd_format_secure (EMFormat *emf,
 		pobj->object.free = efhd_xpkcs7mime_free;
 		g_string_append_printf (
 			buffer,
-			"<td valign=center><object classid=\"%s\">"
+			"<td valign=center><object data=\"%s\" type=\"application/x-gtk-widget\">"
 			"</object></td><td width=100%% valign=center>",
 			classid);
 		g_free (classid);
@@ -1117,10 +1101,9 @@ attachment_button_realized (GtkWidget *widget)
 /* ********************************************************************** */
 
 /* attachment button callback */
-static gboolean
+static GtkWidget*
 efhd_attachment_button (EMFormatHTML *efh,
-                        GtkHTMLEmbedded *eb,
-                        EMFormatHTMLPObject *pobject)
+						EMFormatHTMLPObject *pobject)
 {
 	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) efh;
 	struct _attach_puri *info;
@@ -1158,7 +1141,7 @@ efhd_attachment_button (EMFormatHTML *efh,
 
 	if (!info || info->forward) {
 		g_warning ("unable to expand the attachment\n");
-		return TRUE;
+		return NULL;
 	}
 
 	attachment = info->attachment;
@@ -1194,7 +1177,6 @@ efhd_attachment_button (EMFormatHTML *efh,
 	e_attachment_button_set_attachment (
 		E_ATTACHMENT_BUTTON (widget), attachment);
 	gtk_widget_set_can_focus (widget, TRUE);
-	gtk_container_add (GTK_CONTAINER (eb), widget);
 	gtk_widget_show (widget);
 
 	/* FIXME Not sure why the expanded callback can't just use
@@ -1210,13 +1192,14 @@ efhd_attachment_button (EMFormatHTML *efh,
 	/* If the button is created, then give it focus after
 	 * it is realized, so that user can use arrow keys to scroll
 	 * message */
-	if (efhd->priv->attachment_expanded) {
+	 /* WEBKIT: Is this still needed? */
+	if (efhd->priv->attachment_expanded || e_attachment_button_get_expanded (E_ATTACHMENT_BUTTON (widget))) {
 		g_signal_connect (
 			widget, "realize",
 			G_CALLBACK (attachment_button_realized), NULL);
 	}
 
-	return TRUE;
+	return widget;
 }
 
 static void
@@ -1266,9 +1249,8 @@ efhd_bar_resize (EMFormatHTML *efh,
 	}
 }
 
-static gboolean
+static GtkWidget*
 efhd_add_bar (EMFormatHTML *efh,
-              GtkHTMLEmbedded *eb,
               EMFormatHTMLPObject *pobject)
 {
 	EMFormatHTMLDisplayPrivate *priv;
@@ -1284,17 +1266,16 @@ efhd_add_bar (EMFormatHTML *efh,
 	priv = EM_FORMAT_HTML_DISPLAY (efh)->priv;
 
 	widget = e_mail_attachment_bar_new ();
-	gtk_container_add (GTK_CONTAINER (eb), widget);
 
 	g_hash_table_insert (priv->attachment_views, g_strdup (strchr (pobject->classid, ':') + 1), widget);
 	g_object_weak_ref (G_OBJECT (widget), efhd_attachment_view_gone_cb, efh);
 	gtk_widget_hide (widget);
 
 	g_signal_connect_swapped (
-		eb, "size-allocate",
+		widget, "size-allocate",
 		G_CALLBACK (efhd_bar_resize), efh);
 
-	return TRUE;
+	return widget;
 }
 
 static void
@@ -1319,7 +1300,7 @@ efhd_message_add_bar (EMFormat *emf,
 		classid, part, efhd_add_bar);
 
 	content = g_strdup_printf (
-		"<td><object classid=\"%s\"></object></td>", classid);
+		"<td><object data=\"%s\" type=\"application/x-gtk-widget\"></object></td>", classid);
 	camel_stream_write_string (stream, content, NULL, NULL);
 	g_free (content);
 
@@ -1355,10 +1336,9 @@ efhd_resize (GtkWidget *w,
 }
 
 /* optional render attachment button callback */
-static gboolean
+static GtkWidget*
 efhd_attachment_optional (EMFormatHTML *efh,
-                          GtkHTMLEmbedded *eb,
-                          EMFormatHTMLPObject *pobject)
+						  EMFormatHTMLPObject *pobject)
 {
 	struct _attach_puri *info;
 	GtkWidget *hbox, *vbox, *button, *mainbox, *scroll, *label, *img;
@@ -1375,7 +1355,7 @@ efhd_attachment_optional (EMFormatHTML *efh,
 	info = (struct _attach_puri *) em_format_find_puri ((EMFormat *) efh, pobject->classid);
 	if (!info || info->forward) {
 		g_warning ("unable to expand the attachment\n");
-		return TRUE;
+		return NULL;
 	}
 
 	scroll = gtk_scrolled_window_new (NULL, NULL);
@@ -1449,10 +1429,9 @@ efhd_attachment_optional (EMFormatHTML *efh,
 		gtk_widget_hide (scroll);
 
 	gtk_widget_show (vbox);
-	gtk_container_add (GTK_CONTAINER (eb), vbox);
 	info->handle = NULL;
 
-	return TRUE;
+	return view;
 }
 
 static void
