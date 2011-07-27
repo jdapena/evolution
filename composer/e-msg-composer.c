@@ -1784,7 +1784,7 @@ msg_composer_paste_clipboard_targets_cb (GtkClipboard *clipboard,
 }
 
 static void
-msg_composer_paste_clipboard_cb (EWebView *web_view,
+msg_composer_paste_clipboard_cb (EWebViewGtkHTML *web_view,
                                  EMsgComposer *composer)
 {
 	GtkClipboard *clipboard;
@@ -1814,7 +1814,7 @@ msg_composer_realize_gtkhtml_cb (GtkWidget *widget,
 
 	/* When redirecting a message, the message body is not
 	 * editable and therefore cannot be a drag destination. */
-	if (!e_web_view_get_editable (E_WEB_VIEW (widget)))
+	if (!e_web_view_gtkhtml_get_editable (E_WEB_VIEW_GTKHTML (widget)))
 		return;
 
 	view = e_msg_composer_get_attachment_view (composer);
@@ -2062,7 +2062,7 @@ msg_composer_constructed (GObject *object)
 	EAttachmentView *view;
 	EAttachmentStore *store;
 	EComposerHeaderTable *table;
-	EWebView *web_view;
+	EWebViewGtkHTML *web_view;
 	GtkUIManager *ui_manager;
 	GtkToggleAction *action;
 	GArray *array;
@@ -2276,7 +2276,7 @@ msg_composer_key_press_event (GtkWidget *widget,
 	EMsgComposer *composer = E_MSG_COMPOSER (widget);
 	GtkWidget *input_widget;
 	GtkhtmlEditor *editor;
-	EWebView *web_view;
+	EWebViewGtkHTML *web_view;
 
 	editor = GTKHTML_EDITOR (widget);
 	composer = E_MSG_COMPOSER (widget);
@@ -2658,7 +2658,7 @@ e_msg_composer_new (EShell *shell)
 
 	return g_object_new (
 		E_TYPE_MSG_COMPOSER,
-		"html", e_web_view_new (), "shell", shell, NULL);
+		"html", e_web_view_gtkhtml_new (), "shell", shell, NULL);
 }
 
 EFocusTracker *
@@ -3489,7 +3489,7 @@ e_msg_composer_new_redirect (EShell *shell,
 {
 	EMsgComposer *composer;
 	EComposerHeaderTable *table;
-	EWebView *web_view;
+	EWebViewGtkHTML *web_view;
 	const gchar *subject;
 
 	g_return_val_if_fail (E_IS_SHELL (shell), NULL);
@@ -3508,7 +3508,7 @@ e_msg_composer_new_redirect (EShell *shell,
 	e_composer_header_table_set_subject (table, subject);
 
 	web_view = e_msg_composer_get_web_view (composer);
-	e_web_view_set_editable (web_view, FALSE);
+	e_web_view_gtkhtml_set_editable (web_view, FALSE);
 
 	return composer;
 }
@@ -3564,7 +3564,7 @@ e_msg_composer_get_shell (EMsgComposer *composer)
  *
  * Returns: the #EWebView
  **/
-EWebView *
+EWebViewGtkHTML *
 e_msg_composer_get_web_view (EMsgComposer *composer)
 {
 	GtkHTML *html;
@@ -3577,7 +3577,7 @@ e_msg_composer_get_web_view (EMsgComposer *composer)
 	editor = GTKHTML_EDITOR (composer);
 	html = gtkhtml_editor_get_html (editor);
 
-	return E_WEB_VIEW (html);
+	return E_WEB_VIEW_GTKHTML (html);
 }
 
 static void
@@ -4249,7 +4249,7 @@ e_msg_composer_set_body (EMsgComposer *composer,
 {
 	EMsgComposerPrivate *p = composer->priv;
 	EComposerHeaderTable *table;
-	EWebView *web_view;
+	EWebViewGtkHTML *web_view;
 	gchar *buff;
 
 	g_return_if_fail (E_IS_MSG_COMPOSER (composer));
@@ -4265,7 +4265,7 @@ e_msg_composer_set_body (EMsgComposer *composer,
 	gtkhtml_editor_set_html_mode (GTKHTML_EDITOR (composer), FALSE);
 
 	web_view = e_msg_composer_get_web_view (composer);
-	e_web_view_set_editable (web_view, FALSE);
+	e_web_view_gtkhtml_set_editable (web_view, FALSE);
 
 	g_free (p->mime_body);
 	p->mime_body = g_strdup (body);
