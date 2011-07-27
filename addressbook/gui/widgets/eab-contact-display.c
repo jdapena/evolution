@@ -514,7 +514,7 @@ render_contact_list_row (GString *buffer,
 	g_string_append (buffer, "<tr>");
 	if (e_destination_is_evolution_list (destination)) {
 		g_string_append_printf (buffer,
-			"<td width=" IMAGE_COL_WIDTH " valign=\"top\"><img src=\"%s/minus.png\" onClick=\"collapse_list(this, %s);\"></td><td width=\"100%%\">%s",
+			"<td width=" IMAGE_COL_WIDTH " valign=\"top\"><img src=\"%s/minus.png\" onClick=\"collapse_list(this, %s);\" class=\"navigable\"></td><td width=\"100%%\">%s",
 			evolution_imagesdir,
 			e_destination_get_contact_uid (destination),
 			name ? name : email_addr);

@@ -255,68 +255,39 @@ mail_display_process_mailto (EWebView *web_view,
 	return FALSE;
 }
 
-static void
-mail_display_link_clicked (GtkHTML *html,
-                           const gchar *uri)
+static gboolean
+mail_display_link_clicked (WebKitWebView *web_view,
+			   WebKitWebFrame *frame,
+			   WebKitNetworkRequest *request,
+			   WebKitWebNavigationAction *navigation_action,
+			   WebKitWebPolicyDecision *policy_decision,
+			   gpointer user_data)
 {
+	EMailDisplay *display = user_data;
 	EMailDisplayPrivate *priv;
+	const gchar *uri = webkit_network_request_get_uri (request);
 
-	priv = E_MAIL_DISPLAY (html)->priv;
-	g_return_if_fail (priv->formatter != NULL);
+	priv = E_MAIL_DISPLAY (display)->priv;
+	g_return_val_if_fail (priv->formatter != NULL, FALSE);
 
-	if (g_str_has_prefix (uri, "##")) {
-		guint32 flags;
-
-		flags = priv->formatter->header_wrap_flags;
-
-		if (strcmp (uri, "##TO##") == 0) {
-			if (!(flags & EM_FORMAT_HTML_HEADER_TO))
-				flags |= EM_FORMAT_HTML_HEADER_TO;
-			else
-				flags &= ~EM_FORMAT_HTML_HEADER_TO;
-		} else if (strcmp (uri, "##CC##") == 0) {
-			if (!(flags & EM_FORMAT_HTML_HEADER_CC))
-				flags |= EM_FORMAT_HTML_HEADER_CC;
-			else
-				flags &= ~EM_FORMAT_HTML_HEADER_CC;
-		} else if (strcmp (uri, "##BCC##") == 0) {
-			if (!(flags & EM_FORMAT_HTML_HEADER_BCC))
-				flags |= EM_FORMAT_HTML_HEADER_BCC;
-			else
-				flags &= ~EM_FORMAT_HTML_HEADER_BCC;
-		} else if (strcmp (uri, "##HEADERS##") == 0) {
-			EMFormatHTMLHeadersState state;
-
-			state = em_format_html_get_headers_state (
-				priv->formatter);
-
-			if (state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED)
-				state = EM_FORMAT_HTML_HEADERS_STATE_EXPANDED;
-			else
-				state = EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED;
-
-			em_format_html_set_headers_state (
-				priv->formatter, state);
-		}
-
-		priv->formatter->header_wrap_flags = flags;
-		em_format_queue_redraw (EM_FORMAT (priv->formatter));
-
-	} else if (mail_display_process_mailto (E_WEB_VIEW (html), uri)) {
+	if (mail_display_process_mailto (E_WEB_VIEW (display), uri)) {
 		/* do nothing, function handled the "mailto:" uri already */
-	} else if (*uri == '#')
-		gtk_html_jump_to_anchor (html, uri + 1);
+		webkit_web_policy_decision_ignore (policy_decision);
+		return TRUE;
 
-	else if (g_ascii_strncasecmp (uri, "thismessage:", 12) == 0)
+	} else if (g_ascii_strncasecmp (uri, "thismessage:", 12) == 0) {
 		/* ignore */ ;
+		webkit_web_policy_decision_ignore (policy_decision);
+		return TRUE;
 
-	else if (g_ascii_strncasecmp (uri, "cid:", 4) == 0)
+	} else if (g_ascii_strncasecmp (uri, "cid:", 4) == 0) {
 		/* ignore */ ;
-
-	else {
-		/* Chain up to parent's link_clicked() method. */
-		GTK_HTML_CLASS (parent_class)->link_clicked (html, uri);
+		webkit_web_policy_decision_ignore (policy_decision);
+		return TRUE;
 	}
+
+	/* Let webkit handle it */
+	return FALSE;
 }
 
 static void
@@ -325,7 +296,6 @@ mail_display_class_init (EMailDisplayClass *class)
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 	EWebViewClass *web_view_class;
-	GtkHTMLClass *html_class;
 
 	parent_class = g_type_class_peek_parent (class);
 	g_type_class_add_private (class, sizeof (EMailDisplayPrivate));
@@ -341,10 +311,6 @@ mail_display_class_init (EMailDisplayClass *class)
 
 	web_view_class = E_WEB_VIEW_CLASS (class);
 	web_view_class->process_mailto = mail_display_process_mailto;
-
-	html_class = GTK_HTML_CLASS (class);
-	html_class->url_requested = mail_display_url_requested;
-	html_class->link_clicked = mail_display_link_clicked;
 
 	g_object_class_install_property (
 		object_class,
@@ -366,6 +332,8 @@ mail_display_init (EMailDisplay *display)
 	GError *error = NULL;
 
 	web_view = E_WEB_VIEW (display);
+	g_signal_connect (web_view, "navigation-policy-decision-requested",
+		G_CALLBACK (mail_display_link_clicked), display);
 
 	display->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		display, E_TYPE_MAIL_DISPLAY, EMailDisplayPrivate);

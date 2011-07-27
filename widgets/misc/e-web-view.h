@@ -28,6 +28,7 @@
 #define E_WEB_VIEW_H
 
 #include <webkit/webkit.h>
+#include <JavaScriptCore/JavaScript.h>
 
 /* Standard GObject macros */
 #define E_TYPE_WEB_VIEW \
@@ -58,6 +59,11 @@ struct _EWebView {
 	WebKitWebView parent;
 	EWebViewPrivate *priv;
 };
+
+typedef void (*EWebViewJSFunctionCallback) 	(EWebView *web_view,
+						 size_t arg_count,
+						 const JSValueRef args[],
+						 gpointer user_data);
 
 struct _EWebViewClass {
 	WebKitWebViewClass parent_class;
@@ -112,6 +118,8 @@ void		e_web_view_frame_load_uri	(EWebView *web_view,
 						 const gchar *uri);
 const gchar*	e_web_view_frame_get_uri	(EWebView *web_view,
 						 const gchar *frame_name);
+JSGlobalContextRef
+		e_web_view_get_global_context	(EWebView *web_view);
 GType		e_web_view_exec_script		(EWebView *web_view,
 						 const gchar *script,
 						 GValue *value);
@@ -119,6 +127,10 @@ GType		e_web_view_frame_exec_script	(EWebView *web_view,
 						 const gchar *frame_name,
 						 const gchar *script,
 						 GValue *value);
+void		e_web_view_install_js_callback  (EWebView *web_view,
+						 const gchar *fnc_name,
+						 EWebViewJSFunctionCallback callback,
+						 gpointer user_data);
 gchar *		e_web_view_get_html		(EWebView *web_view);
 gboolean	e_web_view_get_animate		(EWebView *web_view);
 void		e_web_view_set_animate		(EWebView *web_view,
