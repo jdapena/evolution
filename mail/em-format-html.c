@@ -54,6 +54,8 @@
 
 #include <glib/gi18n.h>
 
+#include <JavaScriptCore/JavaScript.h>
+
 #include "e-mail-enumtypes.h"
 #include "em-format-html.h"
 #include "em-utils.h"
@@ -135,7 +137,11 @@ static void	efh_resource_requested		(WebKitWebView *web_view,
 						 WebKitNetworkRequest *request,
 						 WebKitNetworkResponse *reponse,
 						 gpointer user_data);
-
+static void	efh_install_js_callbacks	(WebKitWebView *web_view,
+						 WebKitWebFrame *frame,
+						 gpointer context,
+						 gpointer window_object,
+						 gpointer user_data);
 static void	efh_format_message		(EMFormat *emf,
 						 CamelStream *stream,
 						 CamelMimePart *part,
@@ -1001,6 +1007,9 @@ efh_init (EMFormatHTML *efh,
 	g_signal_connect (
 		web_view, "frame-created",
 		G_CALLBACK (efh_webview_frame_created), efh);
+	g_signal_connect (
+		web_view, "window-object-cleared",
+		G_CALLBACK (efh_install_js_callbacks), efh);
 
 	color = &efh->priv->colors[EM_FORMAT_HTML_COLOR_BODY];
 	gdk_color_parse ("#eeeeee", color);
@@ -1799,10 +1808,10 @@ efh_webview_frame_loaded (GObject *object,
 	frame_name = webkit_web_frame_get_name (frame);
 
 	/* Get total height of the document inside the frame */
-	e_web_view_frame_exec_script (E_WEB_VIEW (web_view), frame_name, "document.body.offsetHeight;", &val);
+	e_web_view_frame_exec_script (E_WEB_VIEW (web_view), frame_name, "document.body.scrollHeight;", &val);
 
 	/* Change height of the frame so that entire content is visible */
-	script = g_strdup_printf ("window.document.getElementById(\"%s\").height=%d;", frame_name, (int)g_value_get_double (&val));
+	script = g_strdup_printf ("window.document.getElementById(\"%s\").height=%d;", frame_name, (int)(g_value_get_double (&val) + 10));
 	e_web_view_exec_script (E_WEB_VIEW (web_view), script, NULL);
 	g_free (script);
 }
@@ -1819,6 +1828,31 @@ efh_webview_frame_created (WebKitWebView *web_view,
 		g_signal_connect (frame,  "notify::load-status",
 			G_CALLBACK (efh_webview_frame_loaded), NULL);
 	}
+}
+
+static void
+efh_headers_collapsed_state_changed (EWebView *web_view, size_t arg_count, const JSValueRef args[], gpointer user_data)
+{
+	EMFormatHTML *efh = user_data;
+	JSGlobalContextRef ctx = e_web_view_get_global_context (web_view);
+
+	gboolean collapsed = JSValueToBoolean (ctx, args[0]);
+
+	if (collapsed) {
+		em_format_html_set_headers_state (efh, EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED);
+	} else {
+		em_format_html_set_headers_state (efh, EM_FORMAT_HTML_HEADERS_STATE_EXPANDED);
+	}
+}
+
+static void
+efh_install_js_callbacks (WebKitWebView *web_view, WebKitWebFrame *frame, gpointer context, gpointer window_object, gpointer user_data)
+{
+	if (frame != webkit_web_view_get_main_frame (web_view))
+		return;
+
+	e_web_view_install_js_callback (E_WEB_VIEW (web_view), "headers_collapsed",
+		(EWebViewJSFunctionCallback) efh_headers_collapsed_state_changed, user_data);
 }
 
 /* ********************************************************************** */
@@ -2641,33 +2675,29 @@ efh_format_text_header (EMFormatHTML *emfh,
 		html = value;
 
 	is_rtl = gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL;
-	if (emfh->simple_headers) {
-		fmt = "<b>%s</b>: %s<br>";
-	} else {
-		if (flags & EM_FORMAT_HTML_HEADER_NOCOLUMNS) {
-			if (flags & EM_FORMAT_HEADER_BOLD) {
-				fmt = "<tr><td><b>%s:</b> %s</td></tr>";
-			} else {
-				fmt = "<tr><td>%s: %s</td></tr>";
-			}
-		} else if (flags & EM_FORMAT_HTML_HEADER_NODEC) {
-			if (is_rtl)
-				fmt = "<tr><td align=\"right\" valign=\"top\" width=\"100%%\">%2$s</td><th valign=top align=\"left\" nowrap>%1$s<b>&nbsp;</b></th></tr>";
-			else
-				fmt = "<tr><th align=\"right\" valign=\"top\" nowrap>%s<b>&nbsp;</b></th><td valign=top>%s</td></tr>";
-		} else {
 
-			if (flags & EM_FORMAT_HEADER_BOLD) {
-				if (is_rtl)
-					fmt = "<tr><td align=\"right\" valign=\"top\" width=\"100%%\">%2$s</td><th align=\"left\" nowrap>%1$s:<b>&nbsp;</b></th></tr>";
-				else
-					fmt = "<tr><th align=\"right\" valign=\"top\" nowrap>%s:<b>&nbsp;</b></th><td>%s</td></tr>";
-			} else {
-				if (is_rtl)
-					fmt = "<tr><td align=\"right\" valign=\"top\" width=\"100%\">%2$s</td><td align=\"left\" nowrap>%1$s:<b>&nbsp;</b></td></tr>";
-				else
-					fmt = "<tr><td align=\"right\" valign=\"top\" nowrap>%s:<b>&nbsp;</b></td><td>%s</td></tr>";
-			}
+	if (flags & EM_FORMAT_HTML_HEADER_NOCOLUMNS) {
+		if (flags & EM_FORMAT_HEADER_BOLD) {
+			fmt = "<tr><td><b>%s:</b> %s</td></tr>";
+		} else {
+			fmt = "<tr><td>%s: %s</td></tr>";
+		}
+	} else if (flags & EM_FORMAT_HTML_HEADER_NODEC) {
+		if (is_rtl)
+			fmt = "<tr><td align=\"right\" valign=\"top\" width=\"100%%\">%2$s</td><th valign=top align=\"left\" nowrap>%1$s<b>&nbsp;</b></th></tr>";
+		else
+			fmt = "<tr><th align=\"right\" valign=\"top\" nowrap>%s<b>&nbsp;</b></th><td valign=top>%s</td></tr>";
+	} else {
+		if (flags & EM_FORMAT_HEADER_BOLD) {
+			if (is_rtl)
+				fmt = "<tr><td align=\"right\" valign=\"top\" width=\"100%%\">%2$s</td><th align=\"left\" nowrap>%1$s:<b>&nbsp;</b></th></tr>";
+			else
+				fmt = "<tr><th align=\"right\" valign=\"top\" nowrap>%s:<b>&nbsp;</b></th><td>%s</td></tr>";
+		} else {
+			if (is_rtl)
+				fmt = "<tr><td align=\"right\" valign=\"top\" width=\"100%\">%2$s</td><td align=\"left\" nowrap>%1$s:<b>&nbsp;</b></td></tr>";
+			else
+				fmt = "<tr><td align=\"right\" valign=\"top\" nowrap>%s:<b>&nbsp;</b></td><td>%s</td></tr>";
 		}
 	}
 
@@ -2691,16 +2721,8 @@ efh_format_address (EMFormatHTML *efh,
 	guint32 flags = CAMEL_MIME_FILTER_TOHTML_CONVERT_SPACES;
 	gchar *name, *mailto, *addr;
 	gint i = 0;
-	gboolean wrap = FALSE;
 	gchar *str = NULL;
 	gint limit = mail_config_get_address_count ();
-
-	if (field ) {
-		if ((!strcmp (field, _("To")) && !(efh->header_wrap_flags & EM_FORMAT_HTML_HEADER_TO))
-		    || (!strcmp (field, _("Cc")) && !(efh->header_wrap_flags & EM_FORMAT_HTML_HEADER_CC))
-		    || (!strcmp (field, _("Bcc")) && !(efh->header_wrap_flags & EM_FORMAT_HTML_HEADER_BCC)))
-		    wrap = TRUE;
-	}
 
 	while (a) {
 		if (a->name)
@@ -2758,48 +2780,47 @@ efh_format_address (EMFormatHTML *efh,
 			g_string_append (out, ", ");
 
 		/* Let us add a '...' if we have more addresses */
-		if (limit > 0 && wrap && a && (i > (limit - 1))) {
+		if (limit > 0 && (i == limit - 1)) {
 			gchar *evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
+			const gchar *id = NULL;
 
-			if (!strcmp (field, _("To"))) {
-				g_string_append (out, "<a href=\"##TO##\">...</a>");
-				str = g_strdup_printf ("<a href=\"##TO##\"><img src=\"%s/plus.png\"></a>  ", evolution_imagesdir);
+			if (strcmp (field, _("To")) == 0) {
+				id = "to";
+			} else if (strcmp (field, _("Cc")) == 0) {
+				id = "cc";
+			} else if (strcmp (field, _("Bcc")) == 0) {
+				id = "bcc";
 			}
-			else if (!strcmp (field, _("Cc"))) {
-				g_string_append (out, "<a href=\"##CC##\">...</a>");
-				str = g_strdup_printf ("<a href=\"##CC##\"><img src=\"%s/plus.png\"></a>  ", evolution_imagesdir);
-			}
-			else if (!strcmp (field, _("Bcc"))) {
-				g_string_append (out, "<a href=\"##BCC##\">...</a>");
-				str = g_strdup_printf ("<a href=\"##BCC##\"><img src=\"%s/plus.png\"></a>  ", evolution_imagesdir);
+
+			if (id) {
+				g_string_append_printf (out, "<span id=\"moreaddr-%s\" style=\"display: none;\">", id);
+				str = g_strdup_printf ("<img src=\"%s/plus.png\" onClick=\"collapse_addresses('%s');\" id=\"moreaddr-img-%s\" class=\"navigable\">  ",
+					evolution_imagesdir, id, id);
 			}
 
 			g_free (evolution_imagesdir);
-
-			if (str)
-				return str;
 		}
-
 	}
 
-	if (limit > 0 && i > (limit)) {
-		gchar *evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
+	if (str) {
+		const gchar *id = NULL;
 
-		if (!strcmp (field, _("To"))) {
-			str = g_strdup_printf ("<a href=\"##TO##\"><img src=\"%s/minus.png\"></a>  ", evolution_imagesdir);
-		}
-		else if (!strcmp (field, _("Cc"))) {
-			str = g_strdup_printf ("<a href=\"##CC##\"><img src=\"%s/minus.png\"></a>  ", evolution_imagesdir);
-		}
-		else if (!strcmp (field, _("Bcc"))) {
-			str = g_strdup_printf ("<a href=\"##BCC##\"><img src=\"%s/minus.png\"></a>  ", evolution_imagesdir);
+		if (strcmp (field, _("To")) == 0) {
+			id = "to";
+		} else if (strcmp (field, _("Cc")) == 0) {
+			id = "cc";
+		} else if (strcmp (field, _("Bcc")) == 0) {
+			id = "bcc";
 		}
 
-		g_free (evolution_imagesdir);
+		if (id) {
+			g_string_append_printf (out, "</span><span class=\"navigable\" onClick=\"collapse_addresses('%s');\" " \
+				"id=\"moreaddr-ellipsis-%s\" style=\"display: inline;\">...</span>",
+				id, id);
+		}
 	}
 
 	return str;
-
 }
 
 static void
@@ -2834,7 +2855,7 @@ efh_format_header (EMFormat *emf,
                    guint32 flags,
                    const gchar *charset)
 {
-	EMFormatHTML *efh = (EMFormatHTML *) emf;
+	EMFormatHTML *efh = EM_FORMAT_HTML (emf);
 	gchar *name, *buf, *value = NULL;
 	const gchar *label, *txt;
 	gboolean addrspec = FALSE;
@@ -2982,12 +3003,85 @@ efh_format_header (EMFormat *emf,
 }
 
 static void
-efh_format_headers (EMFormatHTML *efh,
-                    GString *buffer,
-                    CamelMedium *part,
-                    GCancellable *cancellable)
+efh_format_short_headers (EMFormatHTML *efh,
+			  GString *buffer,
+			  CamelMedium *part,
+			  gboolean visible,
+			  GCancellable *cancellable)
 {
-	EMFormat *emf = (EMFormat *) efh;
+	EMFormat *emf = EM_FORMAT (efh);
+	const gchar *charset;
+	CamelContentType *ct;
+	const gchar *hdr_charset;
+	gchar *evolution_imagesdir;
+	gchar *subject = NULL;
+	struct _camel_header_address *addrs = NULL;
+	struct _camel_header_raw *header;
+	GString *from;
+
+	if (cancellable && g_cancellable_is_cancelled (cancellable))
+		return;
+
+	ct = camel_mime_part_get_content_type ((CamelMimePart *) part);
+	charset = camel_content_type_param (ct, "charset");
+	charset = camel_iconv_charset_name (charset);
+	hdr_charset = emf->charset ? emf->charset : emf->default_charset;
+
+	evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
+	from = g_string_new ("");
+
+	g_string_append_printf (buffer, "<table cellspacing=\"0\" cellpadding=\"0\" border=\"0\" id=\"short-headers\" style=\"display: %s\">",
+		visible ? "block" : "none");
+
+	header = ((CamelMimePart *) part)->headers;
+	while (header) {
+		if (!g_ascii_strcasecmp (header->name, "From")) {
+			GString *tmp;
+			if (!(addrs = camel_header_address_decode (header->value, hdr_charset))) {
+				header = header->next;
+				continue;
+			}
+			tmp = g_string_new ("");
+			efh_format_address (efh, tmp, addrs, header->name);
+
+			if (tmp->len)
+				g_string_printf (from, _("From: %s"), tmp->str);
+			g_string_free (tmp, TRUE);
+
+		} else if (!g_ascii_strcasecmp (header->name, "Subject")) {
+			gchar *buf = NULL;
+			buf = camel_header_unfold (header->value);
+			g_free (subject);
+			subject = camel_header_decode_string (buf, hdr_charset);
+			g_free (buf);
+		}
+		header = header->next;
+	}
+
+	g_string_append_printf (
+		buffer,
+		"<tr><td><strong>%s</strong> %s%s%s</td></tr>",
+		subject ? subject : _("(no subject)"),
+		from->len ? "(" : "", from->str, from->len ? ")" : "");
+
+	g_string_append (buffer, "</table>");
+
+	g_free (subject);
+	if (addrs)
+		camel_header_address_list_clear (&addrs);
+
+	g_string_free (from, TRUE);
+	g_free (evolution_imagesdir);
+}
+
+static void
+efh_format_full_headers (EMFormatHTML *efh,
+			 GString *buffer,
+			 CamelMedium *part,
+			 gboolean visible,
+			 GCancellable *cancellable)
+{
+	EMFormat *emf = EM_FORMAT (efh);
 	const gchar *charset;
 	CamelContentType *ct;
 	struct _camel_header_raw *header;
@@ -3002,80 +3096,18 @@ efh_format_headers (EMFormatHTML *efh,
 	const gchar *hdr_charset;
 	gchar *evolution_imagesdir;
 
-	if (!part)
+	if (cancellable && g_cancellable_is_cancelled (cancellable))
 		return;
 
 	ct = camel_mime_part_get_content_type ((CamelMimePart *) part);
 	charset = camel_content_type_param (ct, "charset");
 	charset = camel_iconv_charset_name (charset);
-
-	if (!efh->simple_headers)
-		g_string_append_printf (
-			buffer, "<font color=\"#%06x\">\n"
-			"<table cellpadding=\"0\" width=\"100%%\">",
-			e_color_to_value (
-				&efh->priv->colors[
-				EM_FORMAT_HTML_COLOR_HEADER]));
-
 	hdr_charset = emf->charset ? emf->charset : emf->default_charset;
+
 	evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
 
-	/* If the header is collapsed, display just subject and sender in one row and leave */
-	if (efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED && efh->priv->headers_collapsable) {
-		gchar *subject = NULL;
-		struct _camel_header_address *addrs = NULL;
-		GString *from = g_string_new ("");
-
-		header = ((CamelMimePart *) part)->headers;
-		while (header) {
-			if (!g_ascii_strcasecmp (header->name, "From")) {
-				GString *tmp;
-				if (!(addrs = camel_header_address_decode (header->value, hdr_charset))) {
-					header = header->next;
-					continue;
-				}
-				tmp = g_string_new ("");
-				efh_format_address (efh, tmp, addrs, header->name);
-
-				if (tmp->len)
-					g_string_printf (from, _("From: %s"), tmp->str);
-				g_string_free (tmp, TRUE);
-			} else if (!g_ascii_strcasecmp (header->name, "Subject")) {
-				gchar *buf = NULL;
-				buf = camel_header_unfold (header->value);
-				g_free (subject);
-				subject = camel_header_decode_string (buf, hdr_charset);
-				g_free (buf);
-			}
-			header = header->next;
-		}
-
-		g_string_append_printf (
-			buffer,
-			"<tr>"
-			"<td width=\"20\" valign=\"top\">"
-			"<a href=\"##HEADERS##\">"
-			"<img src=\"%s/plus.png\">"
-			"</a></td>"
-			"<td><strong>%s</strong> %s%s%s</td>"
-			"</tr>",
-			evolution_imagesdir,
-			subject ? subject : _("(no subject)"),
-			from->len ? "(" : "",
-			from->str,
-			from->len ? ")" : "");
-
-		g_free (subject);
-		if (addrs)
-			camel_header_address_list_clear (&addrs);
-		g_string_free (from, TRUE);
-
-		g_string_append (buffer, "</table>");
-
-		g_free (evolution_imagesdir);
-
-		return;
-	}
+	g_string_append_printf (buffer, "<table cellspacing=\"0\" cellpadding=\"0\" border=\"0\" id=\"full-headers\" style=\"display: %s\" width=\"100%%\">",
+		visible ? "block" : "none");
 
 	header = ((CamelMimePart *) part)->headers;
 	while (header) {
@@ -3146,42 +3178,7 @@ efh_format_headers (EMFormatHTML *efh,
 	g_free (header_sender);
 	g_free (header_from);
 
-	if (gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL) {
-		if (efh->priv->headers_collapsable)
-			g_string_append_printf (
-				buffer,
-				"<tr>"
-				"<td valign=\"top\" width=\"20\">"
-				"<a href=\"##HEADERS##\">"
-				"<img src=\"%s/minus.png\">"
-				"</a></td>"
-				"<td><table width=\"100%%\" border=0 "
-				"cellpadding=\"0\">\n",
-				evolution_imagesdir);
-		else
-			g_string_append (
-				buffer,
-				"<tr><td>"
-				"<table width=\"100%%\" border=0 "
-				"cellpadding=\"0\">\n");
-
-	} else {
-		if (efh->priv->headers_collapsable)
-			g_string_append_printf (
-				buffer,
-				"<tr>"
-				"<td valign=\"top\" width=\"20\">"
-				"<a href=\"##HEADERS##\">"
-				"<img src=\"%s/minus.png\">"
-				"</a></td>"
-				"<td><table border=0 cellpadding=\"0\">\n",
-				evolution_imagesdir);
-		else
-			g_string_append (
-				buffer,
- 				"<tr><td>"
-				"<table border=0 cellpadding=\"0\">\n");
-	}
+	g_string_append (buffer, "<tr><td><table border=0 cellpadding=\"0\">\n");
 
 	g_free (evolution_imagesdir);
 
@@ -3267,98 +3264,136 @@ efh_format_headers (EMFormatHTML *efh,
 		}
 	}
 
-	if (!efh->simple_headers) {
-		g_string_append (buffer, "</table></td>");
+	g_string_append (buffer, "</table></td>");
 
-		if (photo_name) {
-			gchar *classid;
-			CamelMimePart *photopart;
-			gboolean only_local_photo;
+	if (photo_name) {
+		gchar *classid;
+		CamelMimePart *photopart;
+		gboolean only_local_photo;
 
-			cia = camel_internet_address_new ();
-			camel_address_decode ((CamelAddress *) cia, (const gchar *) photo_name);
-			only_local_photo = em_format_html_get_only_local_photos (efh);
-			photopart = em_utils_contact_photo (cia, only_local_photo);
+		cia = camel_internet_address_new ();
+		camel_address_decode ((CamelAddress *) cia, (const gchar *) photo_name);
+		only_local_photo = em_format_html_get_only_local_photos (efh);
+		photopart = em_utils_contact_photo (cia, only_local_photo);
 
-			if (photopart) {
-				contact_has_photo = TRUE;
-				classid = g_strdup_printf (
-					"icon:///em-format-html/%s/photo/header",
-					emf->part_id->str);
-				g_string_append_printf (
-					buffer,
-					"<td align=\"right\" valign=\"top\">"
-					"<img width=64 src=\"%s\"></td>",
-					classid);
-				em_format_add_puri (emf, sizeof (EMFormatPURI), classid,
-					photopart, efh_write_image);
-				g_object_unref (photopart);
-
-				g_free (classid);
-			}
-			g_object_unref (cia);
-		}
-
-		if (!contact_has_photo && face_decoded) {
-			gchar *classid;
-			CamelMimePart *part;
-
-			part = camel_mime_part_new ();
-			camel_mime_part_set_content (
-				(CamelMimePart *) part,
-				(const gchar *) face_header_value,
-				face_header_len, "image/png");
+		if (photopart) {
+			contact_has_photo = TRUE;
 			classid = g_strdup_printf (
-				"icon:///em-format-html/face/photo/header");
-			g_string_append_printf (
-				buffer,
-				"<td align=\"right\" valign=\"top\">"
-				"<img width=48 src=\"%s\"></td>",
-				classid);
-			em_format_add_puri (
-				emf, sizeof (EMFormatPURI),
-				classid, part, efh_write_image);
-			g_object_unref (part);
-			g_free (classid);
-			g_free (face_header_value);
-		}
-
-		if (have_icon && efh->show_icon) {
-			GtkIconInfo *icon_info;
-			gchar *classid;
-			CamelMimePart *iconpart = NULL;
-
-			classid = g_strdup_printf (
-				"icon:///em-format-html/%s/icon/header",
+				"icon:///em-format-html/%s/photo/header",
 				emf->part_id->str);
 			g_string_append_printf (
 				buffer,
 				"<td align=\"right\" valign=\"top\">"
-				"<img width=16 height=16 src=\"%s\"></td>",
+				"<img width=64 src=\"%s\"></td>",
 				classid);
+			em_format_add_puri (emf, sizeof (EMFormatPURI), classid,
+				photopart, efh_write_image);
+			g_object_unref (photopart);
 
-			icon_info = gtk_icon_theme_lookup_icon (
-				gtk_icon_theme_get_default (),
-				"evolution", 16, GTK_ICON_LOOKUP_NO_SVG);
-			if (icon_info != NULL) {
-				iconpart = em_format_html_file_part (
-					(EMFormatHTML *) emf, "image/png",
-					gtk_icon_info_get_filename (icon_info),
-					cancellable);
-				gtk_icon_info_free (icon_info);
-			}
-
-			if (iconpart) {
-				em_format_add_puri (
-					emf, sizeof (EMFormatPURI),
-					classid, iconpart, efh_write_image);
-				g_object_unref (iconpart);
-			}
 			g_free (classid);
 		}
-
-		g_string_append (buffer, "</tr></table>\n</font>\n");
+		g_object_unref (cia);
 	}
+
+	if (!contact_has_photo && face_decoded) {
+		gchar *classid;
+		CamelMimePart *part;
+
+		part = camel_mime_part_new ();
+		camel_mime_part_set_content (
+			(CamelMimePart *) part,
+			(const gchar *) face_header_value,
+			face_header_len, "image/png");
+		classid = g_strdup_printf (
+			"icon:///em-format-html/face/photo/header");
+		g_string_append_printf (
+			buffer,
+			"<td align=\"right\" valign=\"top\">"
+			"<img width=48 src=\"%s\"></td>",
+			classid);
+		em_format_add_puri (
+			emf, sizeof (EMFormatPURI),
+			classid, part, efh_write_image);
+		g_object_unref (part);
+		g_free (classid);
+		g_free (face_header_value);
+	}
+
+	if (have_icon && efh->show_icon) {
+		GtkIconInfo *icon_info;
+		gchar *classid;
+		CamelMimePart *iconpart = NULL;
+
+		classid = g_strdup_printf (
+			"icon:///em-format-html/%s/icon/header",
+			emf->part_id->str);
+		g_string_append_printf (
+			buffer,
+			"<td align=\"right\" valign=\"top\">"
+			"<img width=16 height=16 src=\"%s\"></td>",
+			classid);
+			icon_info = gtk_icon_theme_lookup_icon (
+			gtk_icon_theme_get_default (),
+			"evolution", 16, GTK_ICON_LOOKUP_NO_SVG);
+		if (icon_info != NULL) {
+			iconpart = em_format_html_file_part (
+				(EMFormatHTML *) emf, "image/png",
+				gtk_icon_info_get_filename (icon_info),
+				cancellable);
+			gtk_icon_info_free (icon_info);
+		}
+		if (iconpart) {
+			em_format_add_puri (
+				emf, sizeof (EMFormatPURI),
+				classid, iconpart, efh_write_image);
+			g_object_unref (iconpart);
+		}
+		g_free (classid);
+	}
+
+	g_string_append (buffer, "</tr></table>");
+}
+
+static void
+efh_format_headers (EMFormatHTML *efh,
+                    GString *buffer,
+                    CamelMedium *part,
+                    GCancellable *cancellable)
+{
+	gchar *evolution_imagesdir;
+
+	if (!part)
+		return;
+
+
+	evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
+
+	g_string_append_printf (
+		buffer, "<font color=\"#%06x\">\n"
+		"<table border=\"0\" width=\"100%%\">"
+		"<tr><td valign=\"top\" width=\"20\">",
+		e_color_to_value (
+			&efh->priv->colors[
+			EM_FORMAT_HTML_COLOR_HEADER]));
+
+	if (efh->priv->headers_collapsable) {
+		g_string_append_printf (buffer,
+			"<img src=\"%s/%s\" onClick=\"collapse_headers();\" class=\"navigable\" id=\"collapse-headers-img\" /></td><td>",
+			evolution_imagesdir,
+			(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED) ? "plus.png" : "minus.png");
+
+		efh_format_short_headers (efh, buffer, part,
+			(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED),
+			cancellable);
+	}
+
+	efh_format_full_headers (efh, buffer, part,
+		(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_EXPANDED),
+		cancellable);
+
+	g_string_append (buffer, "</td></tr></table></font>");
+
+	g_free (evolution_imagesdir);
 }
 
 static void
@@ -3380,7 +3415,6 @@ efh_format_message (EMFormat *emf,
 	emf->valid_parent = NULL;
 
 	buffer = g_string_sized_new (1024);
-
 	g_string_append_printf (buffer,
 		"<!doctype html public \"-//W3C//DTD HTML 4.0 TRANSITIONAL//EN\">\n<html>\n"  \
 		"<head>\n<meta name=\"generator\" content=\"Evolution Mail Component\">\n" \
@@ -3389,9 +3423,25 @@ efh_format_message (EMFormat *emf,
 		"  table th { color: #000; font-weight: bold; }\n" \
 		"</style>\n" \
 		"<script type=\"text/javascript\">\n" \
-		"function body_loaded() { window.location.hash=\"" EFM_MESSAGE_START_ANAME "\"; }" \
+		"function body_loaded() { window.location.hash='" EFM_MESSAGE_START_ANAME "'; }\n" \
+		"function collapse_addresses(field) {\n" \
+		"  var e=window.document.getElementById(\"moreaddr-\"+field).style;\n" \
+		"  var f=window.document.getElementById(\"moreaddr-ellipsis-\"+field).style;\n" \
+		"  var g=window.document.getElementById(\"moreaddr-img-\"+field);\n" \
+		"  if (e.display==\"inline\") { e.display=\"none\"; f.display=\"inline\"; g.src=g.src.substr(0,g.src.lastIndexOf(\"/\"))+\"/plus.png\"; }\n" \
+		"  else { e.display=\"inline\"; f.display=\"none\"; g.src=g.src.substr(0,g.src.lastIndexOf(\"/\"))+\"/minus.png\"; }\n" \
+		"}\n" \
+		"function collapse_headers() {\n" \
+		"  var f=window.document.getElementById(\"full-headers\").style;\n" \
+		"  var s=window.document.getElementById(\"short-headers\").style;\n" \
+		"  var i=window.document.getElementById(\"collapse-headers-img\");\n" \
+		"  if (f.display==\"block\") { f.display=\"none\"; s.display=\"block\";" \
+		"	i.src=i.src.substr(0,i.src.lastIndexOf(\"/\"))+\"/plus.png\"; window.headers_collapsed(true, window.em_format_html); }\n" \
+		"  else { f.display=\"block\"; s.display=\"none\";" \
+		"	 i.src=i.src.substr(0,i.src.lastIndexOf(\"/\"))+\"/minus.png\"; window.headers_collapsed(false, window.em_format_html); }\n" \
+		"}\n" \
 		"</script>\n" \
-		"</body>\n" \
+		"</head>\n" \
 		"<body bgcolor =\"#%06x\" text=\"#%06x\" marginwidth=6 marginheight=6 onLoad=\"body_loaded();\">",
 		e_color_to_value (
 			&efh->priv->colors[

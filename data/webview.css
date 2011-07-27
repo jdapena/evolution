@@ -21,3 +21,13 @@ th {
   font-family: monospace;
   font-size: 0.8em;
 }
+
+span.navigable, div.navigable, p.navigable {
+  cursor: hand;
+  text-decoration: underline;
+  color: #003399;
+}
+
+img.navigable {
+  cursor: hand;
+}

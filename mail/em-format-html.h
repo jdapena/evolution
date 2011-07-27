@@ -195,7 +195,6 @@ struct _EMFormatHTMLPObject {
  * @load_http:2:
  * @load_http_now:1:
  * @mark_citations:1:
- * @simple_headers:1:
  * @hide_headers:1:
  * @show_icon:1:
  *
@@ -214,7 +213,6 @@ struct _EMFormatHTML {
 	GSList *headers;
 
 	guint32 text_html_flags; /* default flags for text to html conversion */
-	guint simple_headers:1; /* simple header format, no box/table */
 	guint hide_headers:1; /* no headers at all */
 	guint show_icon:1; /* show an icon when the sender used Evo */
 	guint32 header_wrap_flags;
