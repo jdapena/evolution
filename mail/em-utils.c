@@ -398,6 +398,7 @@ em_utils_flag_for_followup (EMailReader *reader,
 	EShellSettings *shell_settings;
 	EShellBackend *shell_backend;
 	EMFormatHTML *formatter;
+	EWebView *web_view;
 	GtkWidget *editor;
 	GtkWindow *window;
 	CamelTag *tags;
@@ -488,7 +489,8 @@ em_utils_flag_for_followup (EMailReader *reader,
 	camel_tag_list_free (&tags);
 
 	formatter = e_mail_reader_get_formatter (reader);
-	em_format_queue_redraw (EM_FORMAT (formatter));
+	web_view = em_format_html_get_web_view (formatter);
+	e_web_view_reload (web_view);
 
 exit:
 	/* XXX We shouldn't be freeing this. */

@@ -35,6 +35,8 @@
 #include <e-util/e-alert-sink.h>
 #include <e-util/e-plugin-ui.h>
 
+#include <mail/e-mail-request.h>
+
 #include "e-popup-action.h"
 #include "e-selectable.h"
 
@@ -141,134 +143,6 @@ G_DEFINE_TYPE_WITH_CODE (
 	G_IMPLEMENT_INTERFACE (
 		E_TYPE_SELECTABLE,
 		e_web_view_selectable_init))
-
-static EWebViewRequest *
-web_view_request_new (EWebView *web_view,
-                      const gchar *uri)
-{
-	EWebViewRequest *request;
-	GList *list;
-
-	request = g_slice_new (EWebViewRequest);
-
-	/* Try to detect file paths posing as URIs. */
-	if (*uri == '/')
-		request->file = g_file_new_for_path (uri);
-	else
-		request->file = g_file_new_for_uri (uri);
-
-	request->web_view = g_object_ref (web_view);
-	request->cancellable = g_cancellable_new ();
-	request->input_stream = NULL;
-	request->output_buffer = g_string_sized_new (4096);
-
-	list = request->web_view->priv->requests;
-	list = g_list_prepend (list, request);
-	request->web_view->priv->requests = list;
-
-	return request;
-}
-
-static void
-web_view_request_free (EWebViewRequest *request)
-{
-	GList *list;
-
-	list = request->web_view->priv->requests;
-	list = g_list_remove (list, request);
-	request->web_view->priv->requests = list;
-
-	g_object_unref (request->file);
-	g_object_unref (request->web_view);
-	g_object_unref (request->cancellable);
-
-	if (request->input_stream != NULL)
-		g_object_unref (request->input_stream);
-
-	g_string_free (request->output_buffer, TRUE);
-
-	g_slice_free (EWebViewRequest, request);
-}
-
-static void
-web_view_request_cancel (EWebViewRequest *request)
-{
-	g_cancellable_cancel (request->cancellable);
-}
-
-static gboolean
-web_view_request_check_for_error (EWebViewRequest *request,
-                                  GError *error)
-{
-	if (error == NULL)
-		return FALSE;
-
-	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)) {
-		/* use this error, but do not close the stream */
-		g_error_free (error);
-		return TRUE;
-	}
-
-	/* XXX Should we log errors that are not cancellations? */
-
-	web_view_request_free (request);
-	g_error_free (error);
-
-	return TRUE;
-}
-
-static void
-web_view_request_stream_read_cb (GInputStream *input_stream,
-                                 GAsyncResult *result,
-                                 EWebViewRequest *request)
-{
-	gssize bytes_read;
-	GError *error = NULL;
-
-	bytes_read = g_input_stream_read_finish (input_stream, result, &error);
-
-	if (web_view_request_check_for_error (request, error))
-		return;
-
-	if (bytes_read == 0) {
-		e_web_view_load_string (
-			request->web_view,
-			request->output_buffer->str);
-		web_view_request_free (request);
-		return;
-	}
-
-	g_string_append_len (
-		request->output_buffer, request->buffer, bytes_read);
-
-	g_input_stream_read_async (
-		request->input_stream, request->buffer,
-		sizeof (request->buffer), G_PRIORITY_DEFAULT,
-		request->cancellable, (GAsyncReadyCallback)
-		web_view_request_stream_read_cb, request);
-}
-
-static void
-web_view_request_read_cb (GFile *file,
-                          GAsyncResult *result,
-                          EWebViewRequest *request)
-{
-	GFileInputStream *input_stream;
-	GError *error = NULL;
-
-	/* Input stream might be NULL, so don't use cast macro. */
-	input_stream = g_file_read_finish (file, result, &error);
-	request->input_stream = (GInputStream *) input_stream;
-
-	if (web_view_request_check_for_error (request, error))
-		return;
-
-	g_input_stream_read_async (
-		request->input_stream, request->buffer,
-		sizeof (request->buffer), G_PRIORITY_DEFAULT,
-		request->cancellable, (GAsyncReadyCallback)
-		web_view_request_stream_read_cb, request);
-}
 
 static void
 action_copy_clipboard_cb (GtkAction *action,
@@ -915,23 +789,6 @@ web_view_scroll_event (GtkWidget *widget,
 	return FALSE;
 }
 
-#if 0  /* WEBKIT */
-static void
-web_view_url_requested (GtkHTML *html,
-                        const gchar *uri,
-                        GtkHTMLStream *stream)
-{
-	EWebViewRequest *request;
-
-	request = web_view_request_new (E_WEB_VIEW (html), uri, stream);
-
-	g_file_read_async (
-		request->file, G_PRIORITY_DEFAULT,
-		request->cancellable, (GAsyncReadyCallback)
-		web_view_request_read_cb, request);
-}
-#endif
-
 static GtkWidget *
 web_view_create_plugin_widget (EWebView *web_view,
                                const gchar *mime_type,
@@ -1139,10 +996,6 @@ web_view_popup_event (EWebView *web_view,
 static void
 web_view_stop_loading (EWebView *web_view)
 {
-	g_list_foreach (
-		web_view->priv->requests, (GFunc)
-		web_view_request_cancel, NULL);
-
 	webkit_web_view_stop_loading (WEBKIT_WEB_VIEW (web_view));
 }
 
@@ -1645,6 +1498,8 @@ e_web_view_init (EWebView *web_view)
 	WebKitWebSettings *web_settings;
 	const gchar *domain = GETTEXT_PACKAGE;
 	const gchar *id;
+	GtkStyleContext *context;
+	const PangoFontDescription *font;
 	GError *error = NULL;
 
 	web_view->priv = E_WEB_VIEW_GET_PRIVATE (web_view);
@@ -1678,6 +1533,18 @@ e_web_view_init (EWebView *web_view)
 
 	web_settings = webkit_web_view_get_settings (
 		WEBKIT_WEB_VIEW (web_view));
+
+	/* Use same font-size as rest of Evolution */
+	context = gtk_widget_get_style_context (GTK_WIDGET (web_view));
+	font = gtk_style_context_get_font (context, GTK_STATE_FLAG_NORMAL);
+	g_object_set (G_OBJECT (web_settings),
+		"default-font-size", (pango_font_description_get_size (font) / PANGO_SCALE),
+		"default-monospace-font-size", (pango_font_description_get_size (font) / PANGO_SCALE),
+		NULL);
+
+	/* Force frames to be as high as their content (e.g. no scrolling) */
+	g_object_set (G_OBJECT (web_settings), "enable-frame-flattening",
+		TRUE, NULL);
 
 	g_object_bind_property (
 		web_view, "caret-mode",
@@ -1793,6 +1660,7 @@ e_web_view_init (EWebView *web_view)
 	e_plugin_ui_enable_manager (ui_manager, id);
 
 	e_extensible_load_extensions (E_EXTENSIBLE (web_view));
+
 }
 
 GtkWidget *
@@ -1835,6 +1703,14 @@ e_web_view_load_uri (EWebView *web_view,
 	g_return_if_fail (class->load_uri != NULL);
 
 	class->load_uri (web_view, uri);
+}
+
+void
+e_web_view_reload (EWebView *web_view)
+{
+	g_return_if_fail (E_IS_WEB_VIEW (web_view));
+
+	webkit_web_view_reload (WEBKIT_WEB_VIEW (web_view));
 }
 
 const gchar*

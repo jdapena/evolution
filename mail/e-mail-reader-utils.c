@@ -1422,6 +1422,7 @@ headers_changed_cb (GConfClient *client,
                     EMailReader *reader)
 {
 	EMFormatHTML *formatter;
+	EWebView *web_view;
 	GSList *header_config_list, *p;
 
 	g_return_if_fail (client != NULL);
@@ -1453,8 +1454,10 @@ headers_changed_cb (GConfClient *client,
 	g_slist_free (header_config_list);
 
 	/* force a redraw */
-	if (EM_FORMAT (formatter)->message)
-		em_format_queue_redraw (EM_FORMAT (formatter));
+	if (EM_FORMAT (formatter)->message) {
+		web_view = em_format_html_get_web_view (formatter);
+		e_web_view_reload (web_view);
+	}
 }
 
 static void

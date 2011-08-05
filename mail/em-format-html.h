@@ -83,55 +83,6 @@ typedef enum {
 	EM_FORMAT_HTML_NUM_COLOR_TYPES
 } EMFormatHTMLColorType;
 
-/* A HTMLJob will be executed in another thread, in sequence.
- * It's job is to write to its stream, close it if successful,
- * then exit. */
-
-typedef struct _EMFormatHTMLJob EMFormatHTMLJob;
-
-typedef void	(*EMFormatHTMLJobCallback)	(EMFormatHTMLJob *job,
-						 GCancellable *cancellable);
-
-/**
- * struct _EMFormatHTMLJob - A formatting job.
- *
- * @format: Set by allocation function.
- * @stream: Free for use by caller.
- * @puri_level: Set by allocation function.
- * @base: Set by allocation function, used to save state.
- * @callback: This callback will always be invoked, only once, even if the user
- * cancelled the display.  So the callback should free any extra data
- * it allocated every time it is called.
- * @u: Union data, free for caller to use.
- *
- * This object is used to queue a long-running-task which cannot be
- * processed in the primary thread.  When its turn comes, the job will
- * be de-queued and the @callback invoked to perform its processing,
- * restoring various state to match the original state.  This is used
- * for image loading and other internal tasks.
- *
- * This object is struct-subclassable.  Only em_format_html_job_new()
- * may be used to allocate these.
- **/
-struct _EMFormatHTMLJob {
-	EMFormatHTML *format;
-	CamelStream *stream;
-
-	/* We need to track the state of the visibility tree at
-	 * the point this uri was generated */
-	GNode *puri_level;
-	CamelURL *base;
-
-	EMFormatHTMLJobCallback callback;
-	union {
-		gchar *uri;
-		CamelMedium *msg;
-		EMFormatPURI *puri;
-		GNode *puri_level;
-		gpointer data;
-	} u;
-};
-
 /* Pending object (classid: url) */
 typedef struct _EMFormatHTMLPObject EMFormatHTMLPObject;
 
@@ -281,12 +232,7 @@ EMFormatHTMLPObject *
 void		em_format_html_remove_pobject	(EMFormatHTML *efh,
 						 EMFormatHTMLPObject *pobject);
 void		em_format_html_clear_pobject	(EMFormatHTML *efh);
-EMFormatHTMLJob *
-		em_format_html_job_new		(EMFormatHTML *efh,
-						 EMFormatHTMLJobCallback callback,
-						 gpointer data);
-void		em_format_html_job_queue	(EMFormatHTML *efh,
-						 EMFormatHTMLJob *job);
+
 gboolean	em_format_html_get_show_real_date
 						(EMFormatHTML *efh);
 void		em_format_html_set_show_real_date
@@ -307,8 +253,23 @@ void		em_format_html_set_headers_collapsable
 gchar *		em_format_html_format_cert_infos
 						(CamelCipherCertInfo *first_cinfo);
 
-CamelStream *	em_format_html_get_cached_image	(EMFormatHTML *efh,
+CamelStream *	
+			em_format_html_get_cached_image	(EMFormatHTML *efh,
 						 const gchar *image_uri);
+
+void		em_format_html_format_message (EMFormatHTML *efh,
+					       CamelStream *stream,
+					       GCancellable *cancellable);
+
+void		em_format_html_format_message_part (EMFormatHTML *efh,
+						    const gchar *part_id,
+    						    CamelStream *stream,
+						    GCancellable *cancellable);
+void		em_format_html_format_headers (EMFormatHTML *efh,
+					       CamelStream *stream,
+					       CamelMedium *part,
+					       GCancellable *cancellable);
+
 G_END_DECLS
 
 #endif /* EM_FORMAT_HTML_H */
