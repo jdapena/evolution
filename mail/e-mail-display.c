@@ -23,6 +23,8 @@
 #include <config.h>
 #endif
 
+#define LIBSOUP_USE_UNSTABLE_REQUEST_API
+
 #include "e-mail-display.h"
 
 #include <glib/gi18n.h>
@@ -31,6 +33,10 @@
 #include "e-util/e-plugin-ui.h"
 #include "mail/em-composer-utils.h"
 #include "mail/em-utils.h"
+#include "mail/e-mail-request.h"
+
+#include <libsoup/soup.h>
+#include <libsoup/soup-requester.h>
 
 struct _EMailDisplayPrivate {
 	EMFormatHTML *formatter;
@@ -86,7 +92,7 @@ static GtkActionEntry mailto_entries[] = {
 	  NULL,
 	  N_("Send _Reply To..."),
 	  NULL,
-	  N_("Send a reply message to this address"),  
+	  N_("Send a reply message to this address"),
 	  NULL   /* Handled by EMailReader */ },
 
 	/*** Menus ***/
@@ -203,24 +209,12 @@ static void
 mail_display_style_set (GtkWidget *widget,
                         GtkStyle *previous_style)
 {
-	EMailDisplayPrivate *priv;
-
-	priv = E_MAIL_DISPLAY (widget)->priv;
-
 	/* Chain up to parent's style_set() method. */
 	GTK_WIDGET_CLASS (parent_class)->style_set (widget, previous_style);
 
 	mail_display_update_formatter_colors (E_MAIL_DISPLAY (widget));
-	em_format_queue_redraw (EM_FORMAT (priv->formatter));
-}
 
-static void
-mail_display_url_requested (GtkHTML *html,
-                            const gchar *uri,
-                            GtkHTMLStream *stream)
-{
-	/* XXX Sadly, we must block the default method
-	 *     until EMFormatHTML is made asynchronous. */
+	e_web_view_reload (E_WEB_VIEW (widget));
 }
 
 static gboolean
@@ -291,6 +285,93 @@ mail_display_link_clicked (WebKitWebView *web_view,
 }
 
 static void
+mail_display_resource_requested (WebKitWebView *web_view,
+				 WebKitWebFrame *frame,
+				 WebKitWebResource *resource,
+                        	 WebKitNetworkRequest *request,
+                        	 WebKitNetworkResponse *response,
+                        	 gpointer user_data)
+{
+	EMFormatHTML *formatter = E_MAIL_DISPLAY (web_view)->priv->formatter;
+	const gchar *uri = webkit_network_request_get_uri (request);
+
+        /* Redirect cid:part_id to mail://mail_id/cid:part_id */
+        if (g_str_has_prefix (uri, "cid:")) {
+		gchar *new_uri = em_format_build_mail_uri (EM_FORMAT (formatter)->folder,
+			EM_FORMAT (formatter)->uid, uri, EM_FORMAT (formatter));
+
+                webkit_network_request_set_uri (request, new_uri);
+
+                g_free (new_uri);
+
+        /* WebKit won't allow to load a local file when displaing "remote" mail://,
+           protocol, so we need to handle this manually */
+        } else if (g_str_has_prefix (uri, "file:")) {
+                gchar *data = NULL;
+                gsize length = 0;
+                gboolean status;
+                gchar *path;
+
+                path = g_filename_from_uri (uri, NULL, NULL);
+                if (!path)
+                        return;
+
+		status = g_file_get_contents (path, &data, &length, NULL);
+                if (status) {
+                        gchar *b64, *new_uri;
+                        gchar *ct;
+
+                        b64 = g_base64_encode ((guchar*) data, length);
+                        ct = g_content_type_guess (path, NULL, 0, NULL);
+
+                        new_uri =  g_strdup_printf ("data:%s;base64,%s", ct, b64);
+                        webkit_network_request_set_uri (request, new_uri);
+
+                        g_free (b64);
+                        g_free (new_uri);
+                        g_free (ct);
+                }
+                g_free (data);
+                g_free (path);
+        }
+
+       	g_signal_stop_emission_by_name (web_view, "resource-request-starting");
+}
+
+static void
+mail_display_headers_collapsed_state_changed (EWebView *web_view,
+					      size_t arg_count,
+					      const JSValueRef args[],
+					      gpointer user_data)
+{
+	EMFormatHTML *formatter = E_MAIL_DISPLAY (web_view)->priv->formatter;
+	JSGlobalContextRef ctx = e_web_view_get_global_context (web_view);
+
+	gboolean collapsed = JSValueToBoolean (ctx, args[0]);
+
+	if (collapsed) {
+		em_format_html_set_headers_state (formatter, EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED);
+	} else {
+		em_format_html_set_headers_state (formatter, EM_FORMAT_HTML_HEADERS_STATE_EXPANDED);
+	}
+}
+
+static void
+mail_display_install_js_callbacks (WebKitWebView *web_view,
+				   WebKitWebFrame *frame,
+				   gpointer context,
+				   gpointer window_object,
+				   gpointer user_data)
+{
+	if (frame != webkit_web_view_get_main_frame (web_view))
+		return;
+
+	e_web_view_install_js_callback (E_WEB_VIEW (web_view), "headers_collapsed",
+		(EWebViewJSFunctionCallback) mail_display_headers_collapsed_state_changed, user_data);
+}
+
+
+static void
 mail_display_class_init (EMailDisplayClass *class)
 {
 	GObjectClass *object_class;
@@ -326,17 +407,24 @@ mail_display_class_init (EMailDisplayClass *class)
 static void
 mail_display_init (EMailDisplay *display)
 {
-	EWebView *web_view;
 	GtkUIManager *ui_manager;
 	GtkActionGroup *action_group;
 	GError *error = NULL;
+	EWebView *web_view;
+	SoupSession *session;
+	SoupSessionFeature *feature;
 
 	web_view = E_WEB_VIEW (display);
-	g_signal_connect (web_view, "navigation-policy-decision-requested",
-		G_CALLBACK (mail_display_link_clicked), display);
 
 	display->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		display, E_TYPE_MAIL_DISPLAY, EMailDisplayPrivate);
+
+	g_signal_connect (web_view, "navigation-policy-decision-requested",
+		G_CALLBACK (mail_display_link_clicked), display);
+	g_signal_connect (web_view, "resource-request-starting",
+		G_CALLBACK (mail_display_resource_requested), display);
+	g_signal_connect (web_view, "window-object-cleared",
+		G_CALLBACK (mail_display_install_js_callbacks), display);
 
 	/* EWebView's action groups are added during its instance
 	 * initialization function (like what we're in now), so it
@@ -356,6 +444,14 @@ mail_display_init (EMailDisplay *display)
 	gtk_ui_manager_add_ui_from_string (ui_manager, ui, -1, &error);
 	if (error != NULL)
 		g_error ("%s", error->message);
+
+
+	/* Register our own handler for mail:// protocol */
+	session = webkit_get_default_session ();
+	feature = SOUP_SESSION_FEATURE (soup_requester_new ());
+	soup_session_feature_add_feature (feature, E_TYPE_MAIL_REQUEST);
+	soup_session_add_feature (session, feature);
+	g_object_unref (feature);
 }
 
 GType
@@ -403,6 +499,8 @@ e_mail_display_set_formatter (EMailDisplay *display,
 		g_object_unref (display->priv->formatter);
 
 	display->priv->formatter = g_object_ref (formatter);
+
+	mail_display_update_formatter_colors (display);
 
 	g_object_notify (G_OBJECT (display), "formatter");
 }

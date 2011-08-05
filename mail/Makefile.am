@@ -30,7 +30,7 @@ libevolution_mail_la_CPPFLAGS =				\
 	$(CERT_UI_CFLAGS)				\
 	$(CANBERRA_CFLAGS)				\
 	$(CLUTTER_CFLAGS)				\
-	$(GTKHTML_CFLAGS)				\
+	$(LIBSOUP_CFLAGS)				\
 	-DEVOLUTION_DATADIR=\""$(datadir)"\"		\
 	-DEVOLUTION_PRIVDATADIR=\""$(privdatadir)"\"	\
 	-DEVOLUTION_ETSPECDIR=\""$(etspecdir)"\"	\
@@ -69,6 +69,7 @@ mailinclude_HEADERS =					\
 	e-mail-migrate.h				\
 	e-mail-reader.h					\
 	e-mail-reader-utils.h				\
+	e-mail-request.h				\
 	e-mail-session.h				\
 	e-mail-session-utils.h				\
 	e-mail-sidebar.h				\
@@ -142,6 +143,7 @@ libevolution_mail_la_SOURCES =				\
 	e-mail-migrate.c				\
 	e-mail-reader.c					\
 	e-mail-reader-utils.c				\
+	e-mail-request.c				\
 	e-mail-session.c				\
 	e-mail-session-utils.c				\
 	e-mail-sidebar.c				\
@@ -216,7 +218,10 @@ libevolution_mail_la_LIBADD =				\
 	$(CANBERRA_LIBS)				\
 	$(CLUTTER_LIBS)					\
 	$(GTKHTML_LIBS)					\
-	$(SMIME_LIBS)
+	$(E_WIDGETS_LIBS)				\
+	$(SMIME_LIBS)					\
+	$(LIBSOUP_LIBS)					\
+	$(GNOME_PLATFORM_LIBS)
 
 libevolution_mail_la_LDFLAGS = $(NO_UNDEFINED)
 

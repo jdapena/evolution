@@ -76,16 +76,8 @@ struct _EMFormatHTMLCache {
 struct _EMFormatHTMLPrivate {
 	EWebView *web_view;
 
-	CamelMimeMessage *last_part;	/* not reffed, DO NOT dereference */
-	volatile gint format_id;		/* format thread id */
-	guint format_timeout_id;
-	struct _format_msg *format_timeout_msg;
-
 	/* Table that re-maps text parts into a mutlipart/mixed, EMFormatHTMLCache * */
 	GHashTable *text_inline_parts;
-
-	GQueue pending_jobs;
-	GMutex *lock;
 
 	GdkColor colors[EM_FORMAT_HTML_NUM_COLOR_TYPES];
 	EMailImageLoadingPolicy image_loading_policy;
@@ -118,30 +110,6 @@ enum {
 };
 
 
-static void	emfh_format_email		(struct _EMFormatHTMLJob *job,
-	       	   				 GCancellable *cancellable);
-
-static gboolean	efh_display_formatted_data	(gpointer data);
-
-static GtkWidget* efh_create_plugin_widget	(WebKitWebView *web_view,
-						 gchar *mime_type,
-						 gchar *uri,
-						 GHashTable *param,
-						 gpointer user_data);
-static void	efh_webview_frame_created	(WebKitWebView *web_view,
-						 WebKitWebFrame *frame,
-						 gpointer user_data);
-static void	efh_resource_requested		(WebKitWebView *web_view,
-						 WebKitWebFrame *frame,
-						 WebKitWebResource *resource,
-						 WebKitNetworkRequest *request,
-						 WebKitNetworkResponse *reponse,
-						 gpointer user_data);
-static void	efh_install_js_callbacks	(WebKitWebView *web_view,
-						 WebKitWebFrame *frame,
-						 gpointer context,
-						 gpointer window_object,
-						 gpointer user_data);
 static void	efh_format_message		(EMFormat *emf,
 						 CamelStream *stream,
 						 CamelMimePart *part,
@@ -167,223 +135,6 @@ static CamelDataCache *emfh_http_cache;
 
 #define EMFH_HTTP_CACHE_PATH "http"
 
-/* Sigh, this is so we have a cancellable, async rendering thread */
-struct _format_msg {
-	MailMsg base;
-
-	EMFormatHTML *format;
-	EMFormat *format_source;
-	CamelFolder *folder;
-	gchar *uid;
-	CamelMimeMessage *message;
-	gboolean cancelled;
-};
-
-static gchar *
-efh_format_desc (struct _format_msg *m)
-{
-	return g_strdup(_("Formatting message"));
-}
-
-static void
-efh_format_exec (struct _format_msg *m,
-                 GCancellable *cancellable,
-                 GError **error)
-{
-	EMFormat *format;
-	struct _EMFormatHTMLJob *job;
-	GNode *puri_level;
-	CamelURL *base;
-
-	if (m->format->priv->web_view == NULL) {
-		m->cancelled = TRUE;
-		return;
-	}
-
-	format = EM_FORMAT (m->format);
-
-	puri_level = format->pending_uri_level;
-	base = format->base;
-
-	do {
-		d(printf("processing job\n"));
-
-		g_mutex_lock (m->format->priv->lock);
-		while ((job = g_queue_pop_head (&m->format->priv->pending_jobs))) {
-
-			g_mutex_unlock (m->format->priv->lock);
-
-			/* This is an implicit check to see if the webview has been destroyed */
-			if (m->format->priv->web_view == NULL)
-				g_cancellable_cancel (cancellable);
-
-			/* call jobs even if cancelled, so they can clean up resources */
-			format->pending_uri_level = job->puri_level;
-			if (job->base)
-				format->base = job->base;
-			/* Call the job's callback, usually a parser */
-			job->callback (job, cancellable);
-			format->base = base;
-
-			/* Display stream created by the callback and free
-			   the job struct */
-			g_idle_add(efh_display_formatted_data, job);
-
-			g_mutex_lock (m->format->priv->lock);
-		}
-		g_mutex_unlock (m->format->priv->lock);
-
-	} while (!g_queue_is_empty (&m->format->priv->pending_jobs));
-
-	d(printf("out of jobs, done\n"));
-
-	format->pending_uri_level = puri_level;
-
-	m->cancelled = m->cancelled || g_cancellable_is_cancelled (cancellable);
-
-	m->format->priv->format_id = -1;
-}
-
-static void
-efh_format_done (struct _format_msg *m)
-{
-	d(printf("formatting finished\n"));
-
-	m->format->priv->format_id = -1;
-	m->format->priv->load_images_now = FALSE;
-	m->format->state = EM_FORMAT_HTML_STATE_NONE;
-	g_signal_emit_by_name(m->format, "complete");
-}
-
-static void
-efh_format_free (struct _format_msg *m)
-{
-	d(printf("formatter freed\n"));
-	g_object_unref (m->format);
-	if (m->folder)
-		g_object_unref (m->folder);
-	g_free (m->uid);
-	if (m->message)
-		g_object_unref (m->message);
-	if (m->format_source)
-		g_object_unref (m->format_source);
-}
-
-static MailMsgInfo efh_format_info = {
-	sizeof (struct _format_msg),
-	(MailMsgDescFunc) efh_format_desc,
-	(MailMsgExecFunc) efh_format_exec,
-	(MailMsgDoneFunc) efh_format_done,
-	(MailMsgFreeFunc) efh_format_free
-};
-
-static gboolean
-efh_display_formatted_data (gpointer data)
-{
-	/* This is an idle callback */
-
-	struct _EMFormatHTMLJob *job = data;
-	EWebView *web_view = job->format->priv->web_view;
-	GByteArray *ba;
-	gchar *content;
-
-	if (web_view == NULL)
-		goto cleanup;
-
-	d(printf("displaying messsage\n"));
-
-	ba = camel_stream_mem_get_byte_array (CAMEL_STREAM_MEM (job->stream));
-
-	content = g_strndup ((gchar*) ba->data, ba->len);
-	e_web_view_load_string (web_view, content);
-
-	g_free (content);
-
-cleanup:
-	/* Clean up the job */
-	g_object_unref (job->stream);
-	if (job->base)
-		camel_url_free (job->base);
-	g_free (job);
-
-	return FALSE;
-}
-
-static gboolean
-efh_format_timeout (struct _format_msg *m)
-{
-	EMFormatHTML *efh = m->format;
-	EMFormat *emf = EM_FORMAT (efh);
-	struct _EMFormatHTMLPrivate *p = efh->priv;
-	EWebView *web_view;
-
-	web_view = em_format_html_get_web_view (efh);
-
-	if (web_view == NULL) {
-		mail_msg_unref (m);
-		return FALSE;
-	}
-
-	d(printf("timeout called ...\n"));
-	if (p->format_id != -1) {
-		d(printf(" still waiting for cancellation to take effect, waiting ...\n"));
-		return TRUE;
-	}
-
-	g_return_val_if_fail (g_queue_is_empty (&p->pending_jobs), FALSE);
-
-	/* call super-class to kick it off */
-	/* FIXME Not passing a GCancellable here. */
-	EM_FORMAT_CLASS (parent_class)->format_clone (
-		emf, m->folder, m->uid,
-		m->message, m->format_source, NULL);
-	em_format_html_clear_pobject (efh);
-
-	/* FIXME: method off EMFormat? */
-	if (emf->valid) {
-		camel_cipher_validity_free (emf->valid);
-		emf->valid = NULL;
-		emf->valid_parent = NULL;
-	}
-
-	if (m->message == NULL) {
-		mail_msg_unref (m);
-		p->last_part = NULL;
-	} else {
-		struct _EMFormatHTMLJob *job;
-
-		/* Queue a job for parsing the email main content */
-		job = em_format_html_job_new (efh, emfh_format_email, m->message);
-		job->stream = camel_stream_mem_new ();
-		em_format_html_job_queue (efh, job);
-
-		efh->state = EM_FORMAT_HTML_STATE_RENDERING;
-#if HAVE_CLUTTER
-		if (p->last_part != m->message && !e_shell_get_express_mode (e_shell_get_default ())) {
-#else
-		if (p->last_part != m->message) {
-#endif
-			gchar *str = g_strdup_printf ("<html><head></head><body>"
-						      "<table width=\"100%%\" height=\"100%%\"><tr>"
-						      "<td valign=\"middle\" align=\"center\"><h5>%s</h5></td>"
-						      "</tr></table>"
-						      "</body></html>", _("Formatting Message..."));
-			e_web_view_load_string (web_view, str);
-			g_free (str);
-
-			g_hash_table_remove_all (p->text_inline_parts);
-
-			p->last_part = m->message;
-		}
-
-		mail_msg_unordered_push (m);
-	}
-
-	p->format_timeout_id = 0;
-	p->format_timeout_msg = NULL;
-
-	return FALSE;
-}
 
 static void
 efh_free_cache (struct _EMFormatHTMLCache *efhc)
@@ -613,17 +364,6 @@ efh_finalize (GObject *object)
 
 	em_format_html_clear_pobject (efh);
 
-	if (priv->format_timeout_id != 0) {
-		g_source_remove (priv->format_timeout_id);
-		priv->format_timeout_id = 0;
-		mail_msg_unref (priv->format_timeout_msg);
-		priv->format_timeout_msg = NULL;
-	}
-
-	/* This probably works ... */
-	if (priv->format_id != -1)
-		mail_msg_cancel (priv->format_id);
-
 	if (priv->web_view != NULL) {
 		g_object_unref (priv->web_view);
 		efh->priv->web_view = NULL;
@@ -631,63 +371,8 @@ efh_finalize (GObject *object)
 
 	g_hash_table_destroy (priv->text_inline_parts);
 
-	g_mutex_free (priv->lock);
-
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (parent_class)->finalize (object);
-}
-
-static void
-efh_format_clone (EMFormat *emf,
-                  CamelFolder *folder,
-                  const gchar *uid,
-                  CamelMimeMessage *msg,
-                  EMFormat *emfsource,
-                  GCancellable *cancellable)
-{
-	EMFormatHTML *efh = EM_FORMAT_HTML (emf);
-	struct _format_msg *m;
-
-	/* No webview, no need to format anything */
-	if (efh->priv->web_view == NULL)
-		return;
-
-	d(printf("efh_format called\n"));
-	if (efh->priv->format_timeout_id != 0) {
-		d(printf(" timeout for last still active, removing ...\n"));
-		g_source_remove (efh->priv->format_timeout_id);
-		efh->priv->format_timeout_id = 0;
-		mail_msg_unref (efh->priv->format_timeout_msg);
-		efh->priv->format_timeout_msg = NULL;
-	}
-
-	if (emfsource != NULL)
-		g_object_ref (emfsource);
-
-	if (folder != NULL)
-		g_object_ref (folder);
-
-	if (msg != NULL)
-		g_object_ref (msg);
-
-	m = mail_msg_new (&efh_format_info);
-	m->format = g_object_ref (emf);
-	m->format_source = emfsource;
-	m->folder = folder;
-	m->uid = g_strdup (uid);
-	m->message = msg;
-
-	if (efh->priv->format_id == -1) {
-		d(printf(" idle, forcing format\n"));
-		efh_format_timeout (m);
-	} else {
-		d(printf(" still busy, cancelling and queuing wait\n"));
-		/* cancel and poll for completion */
-		mail_msg_cancel (efh->priv->format_id);
-		efh->priv->format_timeout_msg = m;
-		efh->priv->format_timeout_id = g_timeout_add (
-			100, (GSourceFunc) efh_format_timeout, m);
-	}
 }
 
 static void
@@ -780,15 +465,6 @@ efh_format_attachment (EMFormat *emf,
 		handle->handler (emf, stream, part, handle, cancellable, FALSE);
 }
 
-static gboolean
-efh_busy (EMFormat *emf)
-{
-	EMFormatHTMLPrivate *priv;
-
-	priv = EM_FORMAT_HTML (emf)->priv;
-
-	return (priv->format_id != -1);
-}
 static void
 efh_base_init (EMFormatHTMLClass *class)
 {
@@ -811,12 +487,10 @@ efh_class_init (EMFormatHTMLClass *class)
 	object_class->finalize = efh_finalize;
 
 	format_class = EM_FORMAT_CLASS (class);
-	format_class->format_clone = efh_format_clone;
 	format_class->format_error = efh_format_error;
 	format_class->format_source = efh_format_source;
 	format_class->format_attachment = efh_format_attachment;
 	format_class->format_secure = efh_format_secure;
-	format_class->busy = efh_busy;
 
 	class->html_widget_type = E_TYPE_WEB_VIEW;
 
@@ -986,10 +660,6 @@ efh_init (EMFormatHTML *efh,
 	efh->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		efh, EM_TYPE_FORMAT_HTML, EMFormatHTMLPrivate);
 
-	g_queue_init (&efh->pending_object_list);
-	g_queue_init (&efh->priv->pending_jobs);
-	efh->priv->lock = g_mutex_new ();
-	efh->priv->format_id = -1;
 	efh->priv->text_inline_parts = g_hash_table_new_full (
 		g_str_hash, g_str_equal,
 		(GDestroyNotify) NULL,
@@ -998,18 +668,7 @@ efh_init (EMFormatHTML *efh,
 	web_view = g_object_new (class->html_widget_type, NULL);
 	efh->priv->web_view = g_object_ref_sink (web_view);
 
-	g_signal_connect (
-		web_view, "resource-request-starting",
-		G_CALLBACK (efh_resource_requested), efh);
-	g_signal_connect (
-		web_view, "create-plugin-widget",
-		G_CALLBACK (efh_create_plugin_widget), efh);
-	g_signal_connect (
-		web_view, "frame-created",
-		G_CALLBACK (efh_webview_frame_created), efh);
-	g_signal_connect (
-		web_view, "window-object-cleared",
-		G_CALLBACK (efh_install_js_callbacks), efh);
+	g_queue_init (&efh->pending_object_list);
 
 	color = &efh->priv->colors[EM_FORMAT_HTML_COLOR_BODY];
 	gdk_color_parse ("#eeeeee", color);
@@ -1035,7 +694,7 @@ efh_init (EMFormatHTML *efh,
 
 	g_signal_connect_swapped (
 		efh, "notify::mark-citations",
-		G_CALLBACK (em_format_queue_redraw), NULL);
+		G_CALLBACK (e_web_view_reload), web_view);
 
 	e_extensible_load_extensions (E_EXTENSIBLE (efh));
 }
@@ -1095,7 +754,7 @@ em_format_html_load_images (EMFormatHTML *efh)
 	/* This will remain set while we're still
 	 * rendering the same message, then it wont be. */
 	efh->priv->load_images_now = TRUE;
-	em_format_queue_redraw (EM_FORMAT (efh));
+	e_web_view_reload (efh->priv->web_view);
 }
 
 void
@@ -1444,416 +1103,72 @@ em_format_html_clear_pobject (EMFormatHTML *efh)
 	}
 }
 
-struct _EMFormatHTMLJob *
-em_format_html_job_new (EMFormatHTML *efh,
-                        void (*callback) (struct _EMFormatHTMLJob *job,
-                                          GCancellable *cancellable),
-                        gpointer data)
-{
-	EMFormat *emf = EM_FORMAT (efh);
-	struct _EMFormatHTMLJob *job = g_malloc0 (sizeof (*job));
-
-	job->format = efh;
-	job->puri_level = emf->pending_uri_level;
-	job->callback = callback;
-	job->u.data = data;
-
-	if (emf->base)
-		job->base = camel_url_copy (emf->base);
-
-	return job;
-}
-
 void
-em_format_html_job_queue (EMFormatHTML *efh,
-                          struct _EMFormatHTMLJob *job)
+em_format_html_format_message (EMFormatHTML *efh,
+							   CamelStream *stream,
+							   GCancellable *cancellable)
 {
-	g_mutex_lock (efh->priv->lock);
-	g_queue_push_tail (&efh->priv->pending_jobs, job);
-	g_mutex_unlock (efh->priv->lock);
-
-	/* If no formatting thread is running, then start one */
-	if (efh->priv->format_id == -1) {
-		struct _format_msg *m;
-
-		d(printf("job queued, launching a new formatter thread\n"));
-
-		m = mail_msg_new (&efh_format_info);
-		m->format = g_object_ref (efh);
-
-		mail_msg_unordered_push (m);
-	} else {
-		d(printf("job queued, a formatter thread already running\n"));
-	}
-}
-
-/* ********************************************************************** */
-
-static void
-emfh_format_email (struct _EMFormatHTMLJob *job,
-				   GCancellable *cancellable)
-{
-	EMFormat *format;
+	EMFormat *emf;
 
 	d(printf(" running format_email task\n"));
+
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
 
-	format = EM_FORMAT (job->format);
 
-	if (format->mode == EM_FORMAT_MODE_SOURCE) {
+	emf = EM_FORMAT (efh);
+	em_format_html_clear_pobject(efh);
+	g_hash_table_remove_all (efh->priv->text_inline_parts);
+
+	if (emf->mode == EM_FORMAT_MODE_SOURCE) {
 		em_format_format_source (
-			format, job->stream,
-			CAMEL_MIME_PART (job->u.msg), cancellable);
+			emf, stream,
+			CAMEL_MIME_PART (emf->message), cancellable);
 	} else {
 		const EMFormatHandler *handle;
 		const gchar *mime_type;
 
 		mime_type = "x-evolution/message/prefix";
-		handle = em_format_find_handler (format, mime_type);
+		handle = em_format_find_handler (emf, mime_type);
 
 		if (handle != NULL)
 			handle->handler (
-				format, job->stream,
-				CAMEL_MIME_PART (job->u.msg), handle,
+				emf, stream,
+				CAMEL_MIME_PART (emf->message), handle,
 				cancellable, FALSE);
 
 		mime_type = "x-evolution/message/rfc822";
-		handle = em_format_find_handler (format, mime_type);
+		handle = em_format_find_handler (emf, mime_type);
 
 		if (handle != NULL)
 			handle->handler (
-				format, job->stream,
-				CAMEL_MIME_PART (job->u.msg), handle,
+				emf, stream,
+				CAMEL_MIME_PART (emf->message), handle,
 				cancellable, FALSE);
 	}
 }
 
-#if 0 /* WEBKIT */
-
-static void
-emfh_getpuri (struct _EMFormatHTMLJob *job,
-              GCancellable *cancellable)
+void
+em_format_html_format_message_part (EMFormatHTML *efh,
+									const gchar *part_id,
+									CamelStream *stream,
+									GCancellable *cancellable)
 {
-	d(printf(" running getpuri task\n"));
-	if (!g_cancellable_is_cancelled (cancellable))
-		job->u.puri->func (
-			EM_FORMAT (job->format), job->stream,
-			job->u.puri, cancellable);
-}
-
-static void
-emfh_gethttp (struct _EMFormatHTMLJob *job,
-              GCancellable *cancellable)
-{
-	CamelStream *cistream = NULL, *costream = NULL, *instream = NULL;
-	CamelURL *url;
-	CamelContentType *content_type;
-	CamelHttpStream *tmp_stream;
-	gssize n, total = 0, pc_complete = 0, nread = 0;
-	gchar buffer[1500];
-	const gchar *length;
-
-	if (g_cancellable_is_cancelled (cancellable)
-	    || (url = camel_url_new (job->u.uri, NULL)) == NULL)
-		goto badurl;
-
-	d(printf(" running load uri task: %s\n", job->u.uri));
-
-	if (emfh_http_cache)
-		instream = cistream = camel_data_cache_get (emfh_http_cache, EMFH_HTTP_CACHE_PATH, job->u.uri, NULL);
-
-	if (instream == NULL) {
-		EMailImageLoadingPolicy policy;
-		gchar *proxy;
-
-		policy = em_format_html_get_image_loading_policy (job->format);
-
-		if (!(job->format->priv->load_images_now
-		      || policy == E_MAIL_IMAGE_LOADING_POLICY_ALWAYS
-		      || (policy == E_MAIL_IMAGE_LOADING_POLICY_SOMETIMES
-			  && em_utils_in_addressbook ((CamelInternetAddress *) camel_mime_message_get_from (job->format->parent.message), FALSE)))) {
-			/* TODO: Ideally we would put the http requests into another queue and only send them out
-			   if the user selects 'load images', when they do.  The problem is how to maintain this
-			   state with multiple renderings, and how to adjust the thread dispatch/setup routine to handle it */
-			camel_url_free (url);
-			goto done;
-		}
-
-		instream = camel_http_stream_new (CAMEL_HTTP_METHOD_GET, ((EMFormat *) job->format)->session, url);
-		camel_http_stream_set_user_agent((CamelHttpStream *)instream, "CamelHttpStream/1.0 Evolution/" VERSION);
-		proxy = em_utils_get_proxy_uri (job->u.uri);
-		if (proxy) {
-			camel_http_stream_set_proxy ((CamelHttpStream *) instream, proxy);
-			g_free (proxy);
-		}
-		camel_operation_push_message (
-			cancellable, _("Retrieving '%s'"), job->u.uri);
-		tmp_stream = (CamelHttpStream *) instream;
-		content_type = camel_http_stream_get_content_type (tmp_stream);
-		length = camel_header_raw_find(&tmp_stream->headers, "Content-Length", NULL);
-		d(printf("  Content-Length: %s\n", length));
-		if (length != NULL)
-			total = atoi (length);
-		camel_content_type_unref (content_type);
-	} else
-		camel_operation_push_message (
-			cancellable, _("Retrieving '%s'"), job->u.uri);
-
-	camel_url_free (url);
-
-	if (instream == NULL)
-		goto done;
-
-	if (emfh_http_cache != NULL && cistream == NULL)
-		costream = camel_data_cache_add (emfh_http_cache, EMFH_HTTP_CACHE_PATH, job->u.uri, NULL);
-
-	do {
-		if (camel_operation_cancel_check (CAMEL_OPERATION (cancellable))) {
-			n = -1;
-			break;
-		}
-		/* FIXME: progress reporting in percentage, can we get the length always?  do we care? */
-		n = camel_stream_read (instream, buffer, sizeof (buffer), cancellable, NULL);
-		if (n > 0) {
-			nread += n;
-			/* If we didn't get a valid Content-Length header, do not try to calculate percentage */
-			if (total != 0) {
-				pc_complete = ((nread * 100) / total);
-				camel_operation_progress (cancellable, pc_complete);
-			}
-			d(printf("  read %d bytes\n", (int)n));
-			if (costream && camel_stream_write (costream, buffer, n, cancellable, NULL) == -1) {
-				n = -1;
-				break;
-			}
-
-			camel_stream_write (job->stream, buffer, n, cancellable, NULL);
-		}
-	} while (n>0);
-
-	/* indicates success */
-	if (n == 0)
-		camel_stream_close (job->stream, cancellable, NULL);
-
-	if (costream) {
-		/* do not store broken files in a cache */
-		if (n != 0)
-			camel_data_cache_remove (emfh_http_cache, EMFH_HTTP_CACHE_PATH, job->u.uri, NULL);
-		g_object_unref (costream);
-	}
-
-	g_object_unref (instream);
-done:
-	camel_operation_pop_message (cancellable);
-badurl:
-	g_free (job->u.uri);
-}
-
-#endif /* WEBKIT */
-
-/* ********************************************************************** */
-static void
-efh_resource_requested (WebKitWebView *web_view, WebKitWebFrame *frame, WebKitWebResource *resource,
-			WebKitNetworkRequest *request, WebKitNetworkResponse *response, gpointer user_data)
-{
-	EMFormatHTML *efh = user_data;
 	EMFormatPURI *puri;
-	const gchar *p_uri = webkit_network_request_get_uri (request);
-	const gchar *uri;
 
-	d(printf("URI requested '%s'\n", p_uri));
-
-	if (g_str_has_prefix (p_uri, "puri:")) {
-		uri = &p_uri[5];
-	} else {
-		uri = p_uri;
-	}
-
-	puri = em_format_find_puri (EM_FORMAT (efh), uri);
-	if (puri) {
-		CamelDataWrapper *dw;
-		CamelContentType *ct;
-
-		dw = camel_medium_get_content (CAMEL_MEDIUM (puri->part));
-		if (!dw) {
-			d(printf("PURI does not contain valid mimepart, skipping\n"));
-			return;
-		}
-
-		ct = camel_data_wrapper_get_mime_type_field (dw);
-
-		if (ct && (camel_content_type_is (ct, "text", "*")
-			   || camel_content_type_is (ct, "image", "*")
-			   || camel_content_type_is (ct, "application", "octet-stream"))) {
-
-			gchar *data, *b64;
-			gchar *cts = camel_data_wrapper_get_mime_type (dw);
-			CamelStream *stream;
-			GByteArray *ba;
-
-			puri->use_count++;
-
-			stream = camel_stream_mem_new ();
-
-			camel_data_wrapper_decode_to_stream_sync (dw, stream, NULL, NULL);
-			ba = camel_stream_mem_get_byte_array (CAMEL_STREAM_MEM (stream));
-			b64 = g_base64_encode ((guchar*) ba->data, ba->len);
-			if (camel_content_type_is (ct, "text", "*")) {
-				const gchar *charset = camel_content_type_param (ct, "charset");
-				data = g_strdup_printf ("data:%s;charset=%s;base64,%s", cts,
-					charset ? charset : "utf-8", b64);
-			} else {
-				data = g_strdup_printf ("data:%s;base64,%s", cts, b64);
-			}
-
-			webkit_network_request_set_uri (request, data);
-			g_free (b64);
-			g_free (data);
-			g_free (cts);
-			g_object_unref (stream);
-
-		} else {
-			d(printf(" part is unknown type '%s', not using\n", ct ? camel_content_type_format(ct) : "<unset>"));
-		}
-	} else if (g_str_has_prefix(uri, "http:") || g_str_has_prefix (uri, "https:")) {
-		d(printf(" Remote URI requetsed, webkit handling it\n"));
-	} else if  (g_str_has_prefix (uri, "file:")) {
-		gchar *data = NULL;
-		gsize length = 0;
-		gboolean status;
-		gchar *path;
-
-		path = g_filename_from_uri (uri, NULL, NULL);
-		if (!path)
-			return;
-
-		d(printf(" Local URI requested, loading file '%s'\n", path));
-
-		status = g_file_get_contents (path, &data, &length, NULL);
-		if (status) {
-			gchar *b64, *new_uri;
-			gchar *ct;
-
-			b64 = g_base64_encode ((guchar*) data, length);
-			ct = g_content_type_guess (path, NULL, 0, NULL);
-
-			new_uri =  g_strdup_printf ("data:%s;base64,%s", ct, b64);
-			webkit_network_request_set_uri (request, new_uri);
-
-			g_free (b64);
-			g_free (new_uri);
-			g_free (ct);
-		}
-		g_free (data);
-		g_free (path);
-	} else {
-		d(printf("HTML Includes reference to unknown uri '%s'\n", uri));
-	}
-
-	g_signal_stop_emission_by_name (web_view, "resource-request-starting");
-}
-
-static GtkWidget*
-efh_create_plugin_widget (WebKitWebView *web_view,
-						  gchar *mime_type,
-						  gchar *uri,
-						  GHashTable *param,
-						  gpointer user_data)
-{
-	EMFormatHTML *efh = user_data;
-	EMFormatHTMLPObject *pobject;
-	const gchar *classid;
-
-	classid = g_hash_table_lookup (param, "data");
-	if (!classid) {
-		d(printf("Object does not have class-id, bailing.\n"));
-		return NULL;
-	}
-
-	pobject = em_format_html_find_pobject (efh, classid);
-	if (pobject) {
-		GtkWidget *widget;
-
-		d(printf("Creating widget for object '%s\n'", classid));
-
-		/* This stops recursion of the part */
-		g_queue_remove (&efh->pending_object_list, pobject);
-		widget = pobject->func (efh, pobject);
-		g_queue_push_head (&efh->pending_object_list, pobject);
-
-		return widget;
-	} else {
-		d(printf("HTML includes reference to unknown object '%s'\n", uri));
-		return NULL;
-	}
-}
-
-static void
-efh_webview_frame_loaded (GObject *object,
-						  GParamSpec *pspec,
-						  gpointer user_data)
-{
-	WebKitWebFrame *frame = WEBKIT_WEB_FRAME (object);
-	WebKitWebView *web_view;
-	const gchar *frame_name;
-	gchar *script;
-	GValue val = {0};
-
-	/* Don't do anything until all content of the frame is loaded*/
-	if (webkit_web_frame_get_load_status (frame) != WEBKIT_LOAD_FINISHED)
+	if (g_cancellable_is_cancelled (cancellable))
 		return;
 
-	web_view = webkit_web_frame_get_web_view (frame);
-	frame_name = webkit_web_frame_get_name (frame);
+	em_format_push_level (EM_FORMAT (efh));
 
-	/* Get total height of the document inside the frame */
-	e_web_view_frame_exec_script (E_WEB_VIEW (web_view), frame_name, "document.body.scrollHeight;", &val);
-
-	/* Change height of the frame so that entire content is visible */
-	script = g_strdup_printf ("window.document.getElementById(\"%s\").height=%d;", frame_name, (int)(g_value_get_double (&val) + 10));
-	e_web_view_exec_script (E_WEB_VIEW (web_view), script, NULL);
-	g_free (script);
-}
-
-
-static void
-efh_webview_frame_created (WebKitWebView *web_view,
-						   WebKitWebFrame *frame,
-						   gpointer user_data)
-{
-	if (frame != webkit_web_view_get_main_frame (web_view)) {
-
-		/* Get notified when all content of frame is loaded */
-		g_signal_connect (frame,  "notify::load-status",
-			G_CALLBACK (efh_webview_frame_loaded), NULL);
-	}
-}
-
-static void
-efh_headers_collapsed_state_changed (EWebView *web_view, size_t arg_count, const JSValueRef args[], gpointer user_data)
-{
-	EMFormatHTML *efh = user_data;
-	JSGlobalContextRef ctx = e_web_view_get_global_context (web_view);
-
-	gboolean collapsed = JSValueToBoolean (ctx, args[0]);
-
-	if (collapsed) {
-		em_format_html_set_headers_state (efh, EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED);
-	} else {
-		em_format_html_set_headers_state (efh, EM_FORMAT_HTML_HEADERS_STATE_EXPANDED);
-	}
-}
-
-static void
-efh_install_js_callbacks (WebKitWebView *web_view, WebKitWebFrame *frame, gpointer context, gpointer window_object, gpointer user_data)
-{
-	if (frame != webkit_web_view_get_main_frame (web_view))
+	puri = em_format_find_puri (EM_FORMAT (efh), part_id);
+	if (!puri) {
+		d(printf("Can't find PURI %s", part_id));
 		return;
-
-	e_web_view_install_js_callback (E_WEB_VIEW (web_view), "headers_collapsed",
-		(EWebViewJSFunctionCallback) efh_headers_collapsed_state_changed, user_data);
+	}
+	puri->func (EM_FORMAT (efh), stream, puri, cancellable);
 }
+
 
 /* ********************************************************************** */
 #include "em-format/em-inline-filter.h"
@@ -2209,6 +1524,7 @@ efh_text_html (EMFormat *emf,
 	const gchar *location;
 	gchar *cid = NULL;
 	gchar *content;
+	gchar *mail_uri;
 
 	content = g_strdup_printf (
 		"<div style=\"border: solid #%06x 1px; "
@@ -2253,12 +1569,16 @@ efh_text_html (EMFormat *emf,
 		emf, sizeof (EMFormatPURI), cid,
 		part, efh_write_text_html);
 	d(printf("adding iframe, location %s\n", cid));
+
+	mail_uri = em_format_build_mail_uri (emf->folder, emf->uid, cid, emf);
+
 	content = g_strdup_printf (
-		"<iframe name=\"html-frame-%s\" id=\"html-frame-%s\" src=\"puri:%s\" frameborder=0 scrolling=no width=\"100%%\" >" \
-		"Could not get %s</iframe>\n</div>\n", cid, cid, cid, cid);
+		"<iframe name=\"html-frame-%s\" id=\"html-frame-%s\" src=\"%s\" frameborder=0 scrolling=no width=\"100%%\" >" \
+		"Could not get %s</iframe>\n</div>\n", cid, cid, mail_uri, cid);
 	camel_stream_write_string (stream, content, cancellable, NULL);
 	g_free (content);
 	g_free (cid);
+	g_free (mail_uri);
 }
 
 /* This is a lot of code for something useless ... */
@@ -2432,25 +1752,23 @@ emfh_write_related (EMFormat *emf,
 }
 
 static void
-emfh_multipart_related_check (struct _EMFormatHTMLJob *job,
+emfh_multipart_related_check (EMFormat *emf,
+			      CamelStream *stream,
                               GCancellable *cancellable)
 {
-	EMFormat *format;
 	GList *link;
 	gchar *oldpartid;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
 
-	format = EM_FORMAT (job->format);
-
 	d(printf(" running multipart/related check task\n"));
-	oldpartid = g_strdup (format->part_id->str);
+	oldpartid = g_strdup (emf->part_id->str);
 
-	link = g_queue_peek_head_link (job->puri_level->data);
+	link = g_queue_peek_head_link (emf->pending_uri_level->data);
 
 	if (!link) {
-		g_string_printf (format->part_id, "%s", oldpartid);
+		g_string_printf (emf->part_id, "%s", oldpartid);
 		g_free (oldpartid);
 		return;
 	}
@@ -2459,11 +1777,11 @@ emfh_multipart_related_check (struct _EMFormatHTMLJob *job,
 		EMFormatPURI *puri = link->data;
 
 		if (puri->use_count == 0) {
-			d(printf("part '%s' '%s' used '%d'\n", puri->uri?puri->uri:"", puri->cid, puri->use_count));
+			d(printf("part '%s' '%s' used '%d'\n", puri->uri?puri->uri:"<no uri>", puri->cid, puri->use_count));
 			if (puri->func == emfh_write_related) {
-				g_string_printf (format->part_id, "%s", puri->part_id);
+				g_string_printf (emf->part_id, "%s", puri->part_id);
 				em_format_part (
-					format, CAMEL_STREAM (job->stream),
+					emf, CAMEL_STREAM (stream),
 					puri->part, cancellable);
 			}
 			/* else it was probably added by a previous format this loop */
@@ -2472,7 +1790,7 @@ emfh_multipart_related_check (struct _EMFormatHTMLJob *job,
 		link = g_list_next (link);
 	}
 
-	g_string_printf (format->part_id, "%s", oldpartid);
+	g_string_printf (emf->part_id, "%s", oldpartid);
 	g_free (oldpartid);
 }
 
@@ -2490,7 +1808,6 @@ efh_multipart_related (EMFormat *emf,
 	CamelContentType *content_type;
 	const gchar *start;
 	gint i, nparts, partidlen, displayid = 0;
-	struct _EMFormatHTMLJob *job;
 
 	if (!CAMEL_IS_MULTIPART (mp)) {
 		em_format_format_source (emf, stream, part, cancellable);
@@ -2549,12 +1866,7 @@ efh_multipart_related (EMFormat *emf,
 	g_string_truncate (emf->part_id, partidlen);
 	camel_stream_flush (stream, cancellable, NULL);
 
-	/* queue a job to check for un-referenced parts to add as attachments */
-	job = em_format_html_job_new (
-		EM_FORMAT_HTML (emf), emfh_multipart_related_check, NULL);
-	job->stream = stream;
-	g_object_ref (stream);
-	em_format_html_job_queue ((EMFormatHTML *) emf, job);
+	emfh_multipart_related_check (emf, stream, cancellable);
 
 	em_format_pull_level (emf);
 }
@@ -2783,7 +2095,6 @@ efh_format_address (EMFormatHTML *efh,
 
 		/* Let us add a '...' if we have more addresses */
 		if (limit > 0 && (i == limit - 1)) {
-			gchar *evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
 			const gchar *id = NULL;
 
 			if (strcmp (field, _("To")) == 0) {
@@ -2796,11 +2107,9 @@ efh_format_address (EMFormatHTML *efh,
 
 			if (id) {
 				g_string_append_printf (out, "<span id=\"moreaddr-%s\" style=\"display: none;\">", id);
-				str = g_strdup_printf ("<img src=\"%s/plus.png\" onClick=\"collapse_addresses('%s');\" id=\"moreaddr-img-%s\" class=\"navigable\">  ",
-					evolution_imagesdir, id, id);
+				str = g_strdup_printf ("<img src=\"evo-file://%s/plus.png\" onClick=\"collapse_addresses('%s');\" id=\"moreaddr-img-%s\" class=\"navigable\">  ",
+					EVOLUTION_IMAGESDIR, id, id);
 			}
-
-			g_free (evolution_imagesdir);
 		}
 	}
 
@@ -3358,17 +2667,13 @@ efh_format_full_headers (EMFormatHTML *efh,
 
 static void
 efh_format_headers (EMFormatHTML *efh,
-                    GString *buffer,
-                    CamelMedium *part,
+		    GString *buffer,
+	            CamelMedium *part,
                     GCancellable *cancellable)
 {
-	gchar *evolution_imagesdir;
 
 	if (!part)
 		return;
-
-
-	evolution_imagesdir = g_filename_to_uri (EVOLUTION_IMAGESDIR, NULL, NULL);
 
 	g_string_append_printf (
 		buffer, "<font color=\"#%06x\">\n"
@@ -3380,8 +2685,8 @@ efh_format_headers (EMFormatHTML *efh,
 
 	if (efh->priv->headers_collapsable) {
 		g_string_append_printf (buffer,
-			"<img src=\"%s/%s\" onClick=\"collapse_headers();\" class=\"navigable\" id=\"collapse-headers-img\" /></td><td>",
-			evolution_imagesdir,
+			"<img src=\"evo-file://%s/%s\" onClick=\"collapse_headers();\" class=\"navigable\" id=\"collapse-headers-img\" /></td><td>",
+			EVOLUTION_IMAGESDIR,
 			(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED) ? "plus.png" : "minus.png");
 
 		efh_format_short_headers (efh, buffer, part,
@@ -3394,8 +2699,6 @@ efh_format_headers (EMFormatHTML *efh,
 		cancellable);
 
 	g_string_append (buffer, "</td></tr></table></font>");
-
-	g_free (evolution_imagesdir);
 }
 
 static void
@@ -3420,7 +2723,7 @@ efh_format_message (EMFormat *emf,
 	g_string_append_printf (buffer,
 		"<!doctype html public \"-//W3C//DTD HTML 4.0 TRANSITIONAL//EN\">\n<html>\n"  \
 		"<head>\n<meta name=\"generator\" content=\"Evolution Mail Component\">\n" \
-		"<link type=\"text/css\" rel=\"stylesheet\" href=\"file://" EVOLUTION_PRIVDATADIR "/theme/webview.css\">\n" \
+		"<link type=\"text/css\" rel=\"stylesheet\" href=\"evo-file://" EVOLUTION_PRIVDATADIR "/theme/webview.css\">\n" \
 		"<style type=\"text/css\">\n" \
 		"  table th { color: #000; font-weight: bold; }\n" \
 		"</style>\n" \
@@ -3457,7 +2760,7 @@ efh_format_message (EMFormat *emf,
 
 	if (!efh->hide_headers)
 		efh_format_headers (
-			efh, buffer, CAMEL_MEDIUM (part), cancellable);
+			efh, buffer, CAMEL_MEDIUM (emf->message), cancellable);
 
 	camel_stream_write (
 		stream, buffer->str, buffer->len, cancellable, NULL);
@@ -3467,17 +2770,17 @@ efh_format_message (EMFormat *emf,
 	handle = em_format_find_handler(emf, "x-evolution/message/post-header");
 	if (handle)
 		handle->handler (
-			emf, stream, part, handle, cancellable, FALSE);
+			emf, stream, CAMEL_MIME_PART (emf->message), handle, cancellable, FALSE);
 
 	camel_stream_write_string (
 		stream, EM_FORMAT_HTML_VPAD, cancellable, NULL);
-	em_format_part (emf, stream, part, cancellable);
+	em_format_part (emf, stream, CAMEL_MIME_PART (emf->message), cancellable);
 
 	if (emf->message != (CamelMimeMessage *) part)
 		camel_stream_write_string (
 			stream, "</blockquote>\n", cancellable, NULL);
 
-	camel_stream_write_string (stream, "</body></html", cancellable, NULL);
+	camel_stream_write_string (stream, "</body></html>", cancellable, NULL);
 
 	camel_cipher_validity_free (emf->valid);
 

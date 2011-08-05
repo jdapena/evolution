@@ -110,6 +110,7 @@ void		e_web_view_load_string		(EWebView *web_view,
 void		e_web_view_load_uri		(EWebView *web_view,
 						 const gchar *uri);
 const gchar*	e_web_view_get_uri		(EWebView *web_view);
+void		e_web_view_reload		(EWebView *web_view);
 void		e_web_view_frame_load_string	(EWebView *web_view,
 						 const gchar *frame_name,
 						 const gchar *string);

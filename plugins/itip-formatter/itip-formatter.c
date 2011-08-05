@@ -2509,10 +2509,9 @@ in_proper_folder (CamelFolder *folder)
 	return res;
 }
 
-static gboolean
+static GtkWidget*
 format_itip_object (EMFormatHTML *efh,
-                    GtkHTMLEmbedded *eb,
-                    EMFormatHTMLPObject *pobject)
+					EMFormatHTMLPObject *pobject)
 {
 	EShell *shell;
 	EShellSettings *shell_settings;
@@ -2548,11 +2547,12 @@ format_itip_object (EMFormatHTML *efh,
 	}
 
 	/* FIXME Handle multiple VEVENTS with the same UID, ie detached instances */
+#if 0  /* WEBKIT - FIXME!! */
 	if (!extract_itip_data (info, GTK_CONTAINER (eb), &have_alarms))
 		return TRUE;
+#endif
 
 	info->view = itip_view_new ();
-	gtk_container_add (GTK_CONTAINER (eb), info->view);
 	gtk_widget_show (info->view);
 
 	response_enabled = in_proper_folder (((EMFormat *) efh)->folder);
@@ -2603,7 +2603,7 @@ format_itip_object (EMFormatHTML *efh,
 			itip_view_set_mode (ITIP_VIEW (info->view), ITIP_VIEW_MODE_REQUEST);
 			break;
 		default:
-			return FALSE;
+			return NULL;
 		}
 	}
 
@@ -2830,7 +2830,7 @@ format_itip_object (EMFormatHTML *efh,
 		}
 	}
 
-	return TRUE;
+	return info->view;
 }
 
 static void

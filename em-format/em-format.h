@@ -53,7 +53,6 @@ G_BEGIN_DECLS
 
 typedef struct _EMFormat EMFormat;
 typedef struct _EMFormatClass EMFormatClass;
-typedef struct _EMFormatPrivate EMFormatPrivate;
 
 typedef struct _EMFormatHandler EMFormatHandler;
 typedef struct _EMFormatHeader EMFormatHeader;
@@ -187,7 +186,6 @@ struct _EMFormatHeader {
  **/
 struct _EMFormat {
 	GObject parent;
-	EMFormatPrivate *priv;
 
 	/* The current message */
 	CamelMimeMessage *message;
@@ -336,6 +334,7 @@ void		em_format_set_inline		(EMFormat *emf,
 gchar *		em_format_describe_part		(CamelMimePart *part,
 						 const gchar *mime_type);
 
+
 /* for implementers */
 GType		em_format_get_type		(void);
 
@@ -378,7 +377,6 @@ void		em_format_format		(EMFormat *emf,
 						 const gchar *uid,
 						 CamelMimeMessage *message,
 						 GCancellable *cancellable);
-void		em_format_queue_redraw		(EMFormat *emf);
 void		em_format_format_attachment	(EMFormat *emf,
 						 CamelStream *stream,
 						 CamelMimePart *mime_part,
@@ -426,6 +424,11 @@ void		em_format_merge_handler		(EMFormat *new,
 						 EMFormat *old);
 
 const gchar *	em_format_snoop_type		(CamelMimePart *part);
+
+gchar *		em_format_build_mail_uri	(CamelFolder *folder,
+						 const gchar *message_uid,
+						 const gchar *part_uid,
+						 EMFormat *emf);
 
 G_END_DECLS
 

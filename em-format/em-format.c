@@ -40,10 +40,6 @@
 
 typedef struct _EMFormatCache EMFormatCache;
 
-struct _EMFormatPrivate {
-	guint redraw_idle_id;
-};
-
 /* Used to cache various data/info for redraws
  * The validity stuff could be cached at a higher level but this is easier
  * This absolutely relies on the partid being _globally unique_
@@ -137,14 +133,14 @@ emf_finalize (GObject *object)
 {
 	EMFormat *emf = EM_FORMAT (object);
 
-	if (emf->priv->redraw_idle_id > 0)
-		g_source_remove (emf->priv->redraw_idle_id);
-
 	if (emf->session)
 		g_object_unref (emf->session);
 
 	if (emf->message)
 		g_object_unref (emf->message);
+
+	if (emf->folder)
+		g_object_unref (emf->folder);
 
 	g_hash_table_destroy (emf->inline_table);
 
@@ -190,12 +186,6 @@ emf_format_clone (EMFormat *emf,
                   EMFormat *emfsource,
                   GCancellable *cancellable)
 {
-	/* Cancel any pending redraws. */
-	if (emf->priv->redraw_idle_id > 0) {
-		g_source_remove (emf->priv->redraw_idle_id);
-		emf->priv->redraw_idle_id = 0;
-	}
-
 	em_format_clear_puri_tree (emf);
 
 	if (emf != emfsource) {
@@ -248,7 +238,6 @@ emf_format_clone (EMFormat *emf,
 	emf->current_message_part_id = g_strdup ("root-message");
 	g_string_truncate (emf->part_id, 0);
 	if (folder != NULL)
-		/* TODO build some string based on the folder name/location? */
 		g_string_append_printf(emf->part_id, ".%p", (gpointer) folder);
 	if (uid != NULL)
 		g_string_append_printf(emf->part_id, ".%s", uid);
@@ -333,7 +322,6 @@ emf_class_init (EMFormatClass *class)
 	GObjectClass *object_class;
 
 	parent_class = g_type_class_peek_parent (class);
-	g_type_class_add_private (class, sizeof (EMFormatPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = emf_finalize;
@@ -360,9 +348,6 @@ emf_init (EMFormat *emf)
 	EShell *shell;
 	EShellSettings *shell_settings;
 
-	emf->priv = G_TYPE_INSTANCE_GET_PRIVATE (
-		emf, EM_TYPE_FORMAT, EMFormatPrivate);
-
 	emf->inline_table = g_hash_table_new_full (
 		g_str_hash, g_str_equal,
 		(GDestroyNotify) NULL,
@@ -374,6 +359,10 @@ emf_init (EMFormat *emf)
 	emf->part_id = g_string_new("");
 	emf->current_message_part_id = NULL;
 	emf->validity_found = 0;
+
+	emf->message = NULL;
+	emf->folder = NULL;
+	emf->uid = NULL;
 
 	shell = e_shell_get_default ();
 	shell_settings = e_shell_get_shell_settings (shell);
@@ -940,28 +929,6 @@ em_format_format (EMFormat *emf,
 	em_format_format_clone (emf, folder, uid, message, NULL, cancellable);
 }
 
-static gboolean
-format_redraw_idle_cb (EMFormat *emf)
-{
-	emf->priv->redraw_idle_id = 0;
-
-	/* FIXME Not passing a GCancellable here. */
-	em_format_format_clone (
-		emf, emf->folder, emf->uid, emf->message, emf, NULL);
-
-	return FALSE;
-}
-
-void
-em_format_queue_redraw (EMFormat *emf)
-{
-	g_return_if_fail (EM_IS_FORMAT (emf));
-
-	if (emf->priv->redraw_idle_id == 0)
-		emf->priv->redraw_idle_id = g_idle_add (
-			(GSourceFunc) format_redraw_idle_cb, emf);
-}
-
 /**
  * em_format_set_mode:
  * @emf:
@@ -980,10 +947,6 @@ em_format_set_mode (EMFormat *emf,
 		return;
 
 	emf->mode = mode;
-
-	/* force redraw if type changed afterwards */
-	if (emf->message != NULL)
-		em_format_queue_redraw (emf);
 }
 
 /**
@@ -1005,9 +968,6 @@ em_format_set_charset (EMFormat *emf,
 
 	g_free (emf->charset);
 	emf->charset = g_strdup (charset);
-
-	if (emf->message)
-		em_format_queue_redraw (emf);
 }
 
 /**
@@ -1031,9 +991,6 @@ em_format_set_default_charset (EMFormat *emf,
 
 	g_free (emf->default_charset);
 	emf->default_charset = g_strdup (charset);
-
-	if (emf->message && emf->charset == NULL)
-		em_format_queue_redraw (emf);
 }
 
 /**
@@ -1218,9 +1175,6 @@ em_format_set_inline (EMFormat *emf,
 		return;
 
 	emfc->state = state ? INLINE_ON : INLINE_OFF;
-
-	if (emf->message)
-		em_format_queue_redraw (emf);
 }
 
 void
@@ -1633,7 +1587,7 @@ emf_multipart_appledouble (EMFormat *emf,
 
 }
 
-/* RFC ??? */
+/* RFC 2046 */
 static void
 emf_multipart_mixed (EMFormat *emf,
                      CamelStream *stream,
@@ -1651,6 +1605,9 @@ emf_multipart_mixed (EMFormat *emf,
 		em_format_format_source (emf, stream, part, cancellable);
 		return;
 	}
+
+	em_format_push_level (emf);
+
 
 	len = emf->part_id->len;
 	nparts = camel_multipart_get_number (mp);
@@ -1685,6 +1642,8 @@ emf_multipart_alternative (EMFormat *emf,
 		em_format_format_source (emf, stream, part, cancellable);
 		return;
 	}
+
+	em_format_push_level (emf);
 
 	/* as per rfc, find the last part we know how to display */
 	nparts = camel_multipart_get_number (mp);
@@ -2489,4 +2448,34 @@ em_format_snoop_type (CamelMimePart *part)
 
 	/* We used to load parts to check their type, we dont anymore,
 	 * see bug #11778 for some discussion */
+}
+
+gchar*
+em_format_build_mail_uri (CamelFolder *folder,
+			  const gchar *message_uid,
+			  const gchar *part_uid,
+			  EMFormat *emf)
+{
+	CamelStore *store;
+
+	g_return_val_if_fail (CAMEL_IS_FOLDER (folder), NULL);
+	g_return_val_if_fail (message_uid && *message_uid, NULL);
+	g_return_val_if_fail (EM_IS_FORMAT (emf), NULL);
+
+	store = camel_folder_get_parent_store (folder);
+
+	if (part_uid) {
+		return g_strdup_printf ("mail://%s/%s/%s?part_id=%s&formatter=%d",
+			camel_service_get_uid (CAMEL_SERVICE (store)),
+			camel_folder_get_full_name (folder),
+			message_uid,
+			part_uid,
+			GPOINTER_TO_INT (emf));
+	}
+
+	return g_strdup_printf ("mail://%s/%s/%s?formatter=%d",
+		camel_service_get_uid (CAMEL_SERVICE (store)),
+		camel_folder_get_full_name (folder),
+		message_uid,
+		GPOINTER_TO_INT (emf));
 }

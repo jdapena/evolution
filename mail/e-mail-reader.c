@@ -433,18 +433,20 @@ action_mail_flag_clear_cb (GtkAction *action,
                            EMailReader *reader)
 {
 	EMFormatHTML *formatter;
+	EWebView *web_view;
 	CamelFolder *folder;
 	GtkWindow *window;
 	GPtrArray *uids;
 
 	folder = e_mail_reader_get_folder (reader);
 	formatter = e_mail_reader_get_formatter (reader);
+	web_view = em_format_html_get_web_view (formatter);
 	uids = e_mail_reader_get_selected_uids (reader);
 	window = e_mail_reader_get_window (reader);
 
 	em_utils_flag_for_followup_clear (window, folder, uids);
 
-	em_format_queue_redraw (EM_FORMAT (formatter));
+	e_web_view_reload (web_view);
 }
 
 static void
@@ -452,18 +454,20 @@ action_mail_flag_completed_cb (GtkAction *action,
                                EMailReader *reader)
 {
 	EMFormatHTML *formatter;
+	EWebView *web_view;
 	CamelFolder *folder;
 	GtkWindow *window;
 	GPtrArray *uids;
 
 	folder = e_mail_reader_get_folder (reader);
 	formatter = e_mail_reader_get_formatter (reader);
+	web_view = em_format_html_get_web_view (formatter);
 	uids = e_mail_reader_get_selected_uids (reader);
 	window = e_mail_reader_get_window (reader);
 
 	em_utils_flag_for_followup_completed (window, folder, uids);
 
-	em_format_queue_redraw (EM_FORMAT (formatter));
+	e_web_view_reload (web_view);
 }
 
 static void
@@ -2515,6 +2519,7 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 	EMEvent *event;
 	EMEventTargetMessage *target;
 	const gchar *message_uid;
+	gchar *mail_uri;
 	gboolean schedule_timeout;
 	gint timeout_interval;
 	GError *error = NULL;
@@ -2543,6 +2548,7 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 
 	backend = e_mail_reader_get_backend (reader);
 	formatter = e_mail_reader_get_formatter (reader);
+	web_view = em_format_html_get_web_view (formatter);
 	message_list = e_mail_reader_get_message_list (reader);
 
 	if (!message_list) {
@@ -2570,10 +2576,14 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 		(EEvent *) event, "message.reading",
 		(EEventTarget *) target);
 
-	/* FIXME Need to pass a GCancellable. */
-	em_format_format (
-		EM_FORMAT (formatter), folder,
-		message_uid, message, NULL);
+
+	/* Initialize formatter */
+	em_format_format_clone (EM_FORMAT (formatter), folder, message_uid, message, NULL, NULL);
+
+	/* Start formatting */
+	mail_uri = em_format_build_mail_uri (folder, message_uid, NULL, EM_FORMAT (formatter));
+	e_web_view_load_uri (web_view, mail_uri);
+	g_free (mail_uri);
 
 	/* Reset the shell view icon. */
 	e_shell_event (shell, "mail-icon", (gpointer) "evolution-mail");
@@ -2700,9 +2710,8 @@ mail_reader_message_selected_timeout_cb (EMailReader *reader)
 			priv->retrieving_message = g_object_ref (cancellable);
 		}
 	} else {
-		/* FIXME Need to pass a GCancellable. */
-		em_format_format (
-			EM_FORMAT (formatter), NULL, NULL, NULL, NULL);
+		e_web_view_load_string (web_view, "");
+
 		priv->restoring_message_selection = FALSE;
 	}
 
@@ -2793,6 +2802,7 @@ mail_reader_set_folder (EMailReader *reader,
 {
 	EMailReaderPrivate *priv;
 	EMFormatHTML *formatter;
+	EWebView *web_view;
 	CamelFolder *previous_folder;
 	GtkWidget *message_list;
 	EMailBackend *backend;
@@ -2803,6 +2813,7 @@ mail_reader_set_folder (EMailReader *reader,
 
 	backend = e_mail_reader_get_backend (reader);
 	formatter = e_mail_reader_get_formatter (reader);
+	web_view = em_format_html_get_web_view (formatter);
 	message_list = e_mail_reader_get_message_list (reader);
 
 	previous_folder = e_mail_reader_get_folder (reader);
@@ -2822,8 +2833,7 @@ mail_reader_set_folder (EMailReader *reader,
 		em_utils_folder_is_outbox (folder) ||
 		em_utils_folder_is_sent (folder));
 
-	/* FIXME Need to pass a GCancellable. */
-	em_format_format (EM_FORMAT (formatter), NULL, NULL, NULL, NULL);
+	e_web_view_load_string (web_view, "");
 
 	priv->folder_was_just_selected = (folder != NULL);
 
