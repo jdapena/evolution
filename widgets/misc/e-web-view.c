@@ -441,32 +441,6 @@ web_view_navigation_policy_decision_requested_cb (EWebView *web_view,
 	return TRUE;
 }
 
-static gboolean
-web_view_notify_load_state_idle_cb (gpointer data)
-{
-	/* XXX Xan says I need to queue a resize here in order for
-	 *     embedded widgets to show.  It's a WebKit/GTK+ bug. */
-	gtk_widget_queue_resize (GTK_WIDGET (data));
-
-	g_debug ("Load Finished");
-
-	return FALSE;
-}
-
-static void
-web_view_notify_load_status_cb (WebKitWebView *web_view,
-                                GParamSpec *pspec)
-{
-	WebKitLoadStatus load_status;
-
-	load_status = webkit_web_view_get_load_status (web_view);
-
-	if (load_status == WEBKIT_LOAD_FINISHED) {
-		gdk_threads_add_idle (
-			web_view_notify_load_state_idle_cb, web_view);
-	}
-}
-
 static void
 web_view_set_property (GObject *object,
                        guint property_id,
@@ -1516,10 +1490,6 @@ e_web_view_init (EWebView *web_view)
 		web_view, "navigation-policy-decision-requested",
 		G_CALLBACK (web_view_navigation_policy_decision_requested_cb),
 		NULL);
-
-	g_signal_connect (
-		web_view, "notify::load-status",
-		G_CALLBACK (web_view_notify_load_status_cb), NULL);
 
 	ui_manager = gtk_ui_manager_new ();
 	web_view->priv->ui_manager = ui_manager;
