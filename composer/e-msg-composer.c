@@ -195,19 +195,20 @@ emcu_part_to_html (CamelMimePart *part,
 	camel_stream_mem_set_byte_array (mem, buf);
 
 	emfq = em_format_quote_new (NULL, (CamelStream *) mem, EM_FORMAT_QUOTE_KEEP_SIG);
-	((EMFormat *) emfq)->composer = TRUE;
+	em_format_set_composer ((EMFormat *) emfq, TRUE);
 	if (source) {
 		/* Copy over things we can, other things are internal.
 		 * XXX Perhaps need different api than 'clone'. */
-		if (source->default_charset)
+		if (em_format_get_default_charset (source))
 			em_format_set_default_charset (
-				(EMFormat *) emfq, source->default_charset);
-		if (source->charset)
-			em_format_set_default_charset (
-				(EMFormat *) emfq, source->charset);
+				(EMFormat *) emfq, em_format_get_default_charset (source));
+		if (em_format_get_charset (source))
+			em_format_set_charset (
+				(EMFormat *) emfq, em_format_get_charset (source));
 	}
-	em_format_part (
-		EM_FORMAT (emfq), CAMEL_STREAM (mem), part, cancellable);
+
+	em_format_format_text (EM_FORMAT (emfq),
+			CAMEL_STREAM (mem), CAMEL_DATA_WRAPPER (part), cancellable);
 	g_object_unref (emfq);
 
 	camel_stream_write((CamelStream *) mem, "", 1, cancellable, NULL);
