@@ -306,18 +306,18 @@ mail_shell_content_get_backend (EMailReader *reader)
 	return e_mail_reader_get_backend (reader);
 }
 
-static EMFormatHTML *
-mail_shell_content_get_formatter (EMailReader *reader)
+static EMailDisplay *
+mail_shell_content_get_mail_display(EMailReader *reader)
 {
 	EMailShellContentPrivate *priv;
+	EMailDisplay *display;
 
 	priv = E_MAIL_SHELL_CONTENT (reader)->priv;
 
 	/* Forward this to our internal EMailView, which
 	 * also implements the EMailReader interface. */
 	reader = E_MAIL_READER (priv->mail_view);
-
-	return e_mail_reader_get_formatter (reader);
+	return e_mail_reader_get_mail_display (reader);
 }
 
 static gboolean
@@ -476,7 +476,7 @@ mail_shell_content_reader_init (EMailReaderInterface *interface)
 	interface->get_action_group = mail_shell_content_get_action_group;
 	interface->get_alert_sink = mail_shell_content_get_alert_sink;
 	interface->get_backend = mail_shell_content_get_backend;
-	interface->get_formatter = mail_shell_content_get_formatter;
+	interface->get_mail_display = mail_shell_content_get_mail_display;
 	interface->get_hide_deleted = mail_shell_content_get_hide_deleted;
 	interface->get_message_list = mail_shell_content_get_message_list;
 	interface->get_popup_menu = mail_shell_content_get_popup_menu;

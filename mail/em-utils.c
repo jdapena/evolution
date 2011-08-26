@@ -397,8 +397,7 @@ em_utils_flag_for_followup (EMailReader *reader,
 	EMailBackend *backend;
 	EShellSettings *shell_settings;
 	EShellBackend *shell_backend;
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 	GtkWidget *editor;
 	GtkWindow *window;
 	CamelTag *tags;
@@ -488,9 +487,8 @@ em_utils_flag_for_followup (EMailReader *reader,
 	camel_folder_thaw (folder);
 	camel_tag_list_free (&tags);
 
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
-	e_web_view_reload (web_view);
+	display = e_mail_reader_get_mail_display (reader);
+	e_mail_display_reload (display);
 
 exit:
 	/* XXX We shouldn't be freeing this. */
@@ -1255,7 +1253,7 @@ em_utils_message_to_html (CamelMimeMessage *message,
 	camel_stream_mem_set_byte_array (CAMEL_STREAM_MEM (mem), buf);
 
 	emfq = em_format_quote_new (credits, mem, flags);
-	((EMFormat *) emfq)->composer = TRUE;
+	em_format_set_composer ((EMFormat *) emfq, TRUE);
 
 	if (!source) {
 		GConfClient *gconf;
@@ -1272,11 +1270,12 @@ em_utils_message_to_html (CamelMimeMessage *message,
 	}
 
 	/* FIXME Not passing a GCancellable here. */
-	em_format_format_clone (
-		EM_FORMAT (emfq), NULL, NULL, message, source, NULL);
+	em_format_parse (EM_FORMAT (emfq), message, NULL, NULL);
+	/* FIXME WEBKIT The validity is now per-part, not global :(
 	if (validity_found)
-		*validity_found = ((EMFormat *)emfq)->validity_found;
+		*validity_found = ((EMFormat *)emfq)->validity_type;
 	g_object_unref (emfq);
+	*/
 
 	if (append && *append)
 		camel_stream_write_string (mem, append, NULL, NULL);
