@@ -52,6 +52,51 @@ G_BEGIN_DECLS
 typedef struct _EMFormatHTMLDisplay EMFormatHTMLDisplay;
 typedef struct _EMFormatHTMLDisplayClass EMFormatHTMLDisplayClass;
 typedef struct _EMFormatHTMLDisplayPrivate EMFormatHTMLDisplayPrivate;
+typedef struct _EMFormatAttachmentPURI EMFormatAttachmentPURI;
+typedef struct _EMFormatSMIMEPURI EMFormatSMIMEPURI;
+
+struct _EMFormatAttachmentPURI {
+	EMFormatPURI puri;
+
+	const EMFormatHandler *handle;
+
+	const gchar *snoop_mime_type;
+
+	/* for the > and V buttons */
+	GtkWidget *forward, *down;
+	guint shown:1;
+
+	/* Attachment */
+	EAttachment *attachment;
+	gchar *attachment_view_part_id;
+	gchar *description;
+
+	/* image stuff */
+	gint fit_width;
+	gint fit_height;
+	GtkImage *image;
+	GtkWidget *event_box;
+
+	/* Optional Text Mem Stream */
+	CamelStreamMem *mstream;
+
+	/* Signed / Encrypted */
+	camel_cipher_validity_sign_t sign;
+	camel_cipher_validity_encrypt_t encrypt;
+};
+
+struct _EMFormatSMIMEPURI {
+	EMFormatPURI puri;
+
+	EMFormatWidgetFunc widget_func;
+
+	gchar *description;
+
+	gint signature;
+	CamelCipherValidity *valid;
+	GtkWidget *widget;
+};
+
 
 struct _EMFormatHTMLDisplay {
 	EMFormatHTML parent;

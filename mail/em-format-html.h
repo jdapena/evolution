@@ -56,6 +56,7 @@ G_BEGIN_DECLS
 typedef struct _EMFormatHTML EMFormatHTML;
 typedef struct _EMFormatHTMLClass EMFormatHTMLClass;
 typedef struct _EMFormatHTMLPrivate EMFormatHTMLPrivate;
+typedef struct _EMFormatWidgetPURI EMFormatWidgetPURI;
 
 enum _em_format_html_header_flags {
 	EM_FORMAT_HTML_HEADER_TO = 1 << 0,
@@ -82,39 +83,6 @@ typedef enum {
 	EM_FORMAT_HTML_COLOR_TEXT,	/* message font color */
 	EM_FORMAT_HTML_NUM_COLOR_TYPES
 } EMFormatHTMLColorType;
-
-/* Pending object (classid: url) */
-typedef struct _EMFormatHTMLPObject EMFormatHTMLPObject;
-
-typedef GtkWidget*
-		(*EMFormatHTMLPObjectFunc)	(EMFormatHTML *md,
-						 EMFormatHTMLPObject *pobject);
-
-/**
- * struct _EMFormatHTMLPObject - Pending object.
- *
- * @free: Invoked when the object is no longer needed.
- * @format: The parent formatter.
- * @classid: The assigned class id as passed to add_pobject().
- * @func: Callback function.
- * @part: The part as passed to add_pobject().
- *
- * This structure is used to track OBJECT tags which have been
- * inserted into the HTML stream.  When GtkHTML requests them the
- * @func will be invoked to create the embedded widget.
- *
- * This object is struct-subclassable.  Only
- * em_format_html_add_pobject() may be used to allocate these.
- **/
-struct _EMFormatHTMLPObject {
-	void (*free)(EMFormatHTMLPObject *);
-	EMFormatHTML *format;
-
-	gchar *classid;
-
-	EMFormatHTMLPObjectFunc func;
-	CamelMimePart *part;
-};
 
 #define EM_FORMAT_HTML_HEADER_NOCOLUMNS (EM_FORMAT_HEADER_LAST)
 
@@ -178,7 +146,6 @@ struct _EMFormatHTMLClass {
 };
 
 GType		em_format_html_get_type		(void);
-EWebView *	em_format_html_get_web_view	(EMFormatHTML *efh);
 void		em_format_html_load_images	(EMFormatHTML *efh);
 void		em_format_html_get_color	(EMFormatHTML *efh,
 						 EMFormatHTMLColorType type,
@@ -207,32 +174,6 @@ gboolean	em_format_html_get_show_sender_photo
 void		em_format_html_set_show_sender_photo
 						(EMFormatHTML *efh,
 						 gboolean show_sender_photo);
-
-/* retrieves a pseudo-part icon wrapper for a file */
-CamelMimePart *	em_format_html_file_part	(EMFormatHTML *efh,
-						 const gchar *mime_type,
-						 const gchar *filename,
-						 GCancellable *cancellable);
-
-/* for implementers */
-EMFormatHTMLPObject *
-		em_format_html_add_pobject	(EMFormatHTML *efh,
-						 gsize size,
-						 const gchar *classid,
-						 CamelMimePart *part,
-						 EMFormatHTMLPObjectFunc func);
-EMFormatHTMLPObject *
-		em_format_html_find_pobject	(EMFormatHTML *efh,
-						 const gchar *classid);
-EMFormatHTMLPObject *
-		em_format_html_find_pobject_func
-						(EMFormatHTML *efh,
-						 CamelMimePart *part,
-						 EMFormatHTMLPObjectFunc func);
-void		em_format_html_remove_pobject	(EMFormatHTML *efh,
-						 EMFormatHTMLPObject *pobject);
-void		em_format_html_clear_pobject	(EMFormatHTML *efh);
-
 gboolean	em_format_html_get_show_real_date
 						(EMFormatHTML *efh);
 void		em_format_html_set_show_real_date
@@ -250,6 +191,12 @@ void		em_format_html_set_headers_collapsable
 						(EMFormatHTML *efh,
 						 gboolean collapsable);
 
+/* retrieves a pseudo-part icon wrapper for a file */
+CamelMimePart *	em_format_html_file_part	(EMFormatHTML *efh,
+						 const gchar *mime_type,
+						 const gchar *filename,
+						 GCancellable *cancellable);
+
 gchar *		em_format_html_format_cert_infos
 						(CamelCipherCertInfo *first_cinfo);
 
@@ -258,17 +205,23 @@ CamelStream *
 						 const gchar *image_uri);
 
 void		em_format_html_format_message (EMFormatHTML *efh,
-					       CamelStream *stream,
-					       GCancellable *cancellable);
+					      CamelStream *stream,
+					      GCancellable *cancellable);
 
 void		em_format_html_format_message_part (EMFormatHTML *efh,
-						    const gchar *part_id,
-    						    CamelStream *stream,
-						    GCancellable *cancellable);
+						  const gchar *part_id,
+    					  CamelStream *stream,
+						  GCancellable *cancellable);
 void		em_format_html_format_headers (EMFormatHTML *efh,
-					       CamelStream *stream,
-					       CamelMedium *part,
-					       GCancellable *cancellable);
+					      CamelStream *stream,
+					      CamelMedium *part,
+					      GCancellable *cancellable);
+
+void		em_format_html_format_headers	(EMFormatHTML *efh,
+					      CamelStream *stream,
+					      CamelMedium *part,
+					      gboolean all_headers,
+					      GCancellable *cancellable);
 
 G_END_DECLS
 
