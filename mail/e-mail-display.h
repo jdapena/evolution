@@ -23,6 +23,7 @@
 #define E_MAIL_DISPLAY_H
 
 #include <widgets/misc/e-web-view.h>
+#include <widgets/misc/e-search-bar.h>
 #include "em-format-html.h"
 
 /* Standard GObject macros */
@@ -50,19 +51,57 @@ typedef struct _EMailDisplay EMailDisplay;
 typedef struct _EMailDisplayClass EMailDisplayClass;
 typedef struct _EMailDisplayPrivate EMailDisplayPrivate;
 
+typedef enum {
+	E_MAIL_DISPLAY_MODE_NORMAL,
+	E_MAIL_DISPLAY_MODE_ALL_HEADERS,
+	E_MAIL_DISPLAY_MODE_SOURCE
+} EMailDisplayMode;
+
 struct _EMailDisplay {
-	EWebView parent;
+	GtkScrolledWindow parent;
 	EMailDisplayPrivate *priv;
+
+	GtkWidget *headers;	/* EWebView */
+	GList *widgets;
 };
 
 struct _EMailDisplayClass {
-	EWebViewClass parent_class;
+	GtkScrolledWindowClass parent_class;
+
+	/* TODO WEBKIT: popup-event signal */
+	/* TODO WEBKIT: status-message signal */
 };
 
-GType		e_mail_display_get_type		(void);
-EMFormatHTML *	e_mail_display_get_formatter	(EMailDisplay *display);
-void		e_mail_display_set_formatter	(EMailDisplay *display,
-						 EMFormatHTML *formatter);
+GType			e_mail_display_get_type			(void);
+EMFormatHTML *		e_mail_display_get_formatter	(EMailDisplay *display);
+void			e_mail_display_set_formatter	(EMailDisplay *display,
+						 	 EMFormatHTML *formatter);
+void			e_mail_display_set_mode		(EMailDisplay *display,
+							 EMailDisplayMode mode);
+EMailDisplayMode	e_mail_display_get_mode		(EMailDisplay *display);
+void			e_mail_display_load		(EMailDisplay *display,
+						 	 const gchar *msg_uri);
+void			e_mail_display_reload		(EMailDisplay *display);
+
+EWebView *		e_mail_display_get_current_web_view
+							(EMailDisplay *display);
+
+void			e_mail_display_set_status	(EMailDisplay *display,
+							 const gchar *status);
+void			e_mail_display_clear		(EMailDisplay *display);
+
+ESearchBar*		e_mail_display_get_search_bar	(EMailDisplay *display);
+
+gboolean		e_mail_display_is_selection_active
+							(EMailDisplay *display);
+
+gchar*			e_mail_display_get_selection_plain_text
+							(EMailDisplay *display, gint *len);
+
+
+void			e_mail_display_zoom_100		(EMailDisplay *display);
+void			e_mail_display_zoom_in		(EMailDisplay *display);
+void			e_mail_display_zoom_out		(EMailDisplay *display);
 
 G_END_DECLS
 

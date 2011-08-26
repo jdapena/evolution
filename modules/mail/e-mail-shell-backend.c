@@ -712,11 +712,12 @@ mbox_create_preview_cb (GObject *preview,
 	g_return_if_fail (preview != NULL);
 	g_return_if_fail (preview_widget != NULL);
 
+	/* FIXME WEBKIT
 	format = em_format_html_display_new ();
 	g_object_set_data_full (
 		preview, "mbox-imp-formatter", format, g_object_unref);
 	web_view = em_format_html_get_web_view (EM_FORMAT_HTML (format));
-
+*/
 	*preview_widget = GTK_WIDGET (web_view);
 }
 
@@ -733,5 +734,7 @@ mbox_fill_preview_cb (GObject *preview,
 	g_return_if_fail (format != NULL);
 
 	/* FIXME Not passing a GCancellable here. */
+	/* FIXME WEBKIT
 	em_format_format (EM_FORMAT (format), NULL, NULL, msg, NULL);
+	*/
 }

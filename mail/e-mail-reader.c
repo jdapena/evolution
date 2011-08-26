@@ -43,13 +43,13 @@
 
 #include "mail/e-mail-backend.h"
 #include "mail/e-mail-browser.h"
-#include "mail/e-mail-display.h"
 #include "mail/e-mail-enumtypes.h"
 #include "mail/e-mail-reader-utils.h"
 #include "mail/em-composer-utils.h"
 #include "mail/em-event.h"
 #include "mail/em-folder-selector.h"
 #include "mail/em-folder-tree.h"
+#include "mail/em-format-html-display.h"
 #include "mail/em-utils.h"
 #include "mail/mail-autofilter.h"
 #include "mail/mail-ops.h"
@@ -195,9 +195,9 @@ action_add_to_address_book_cb (GtkAction *action,
 	EShell *shell;
 	EMailBackend *backend;
 	EShellBackend *shell_backend;
-	EMFormatHTML *formatter;
+	EMailDisplay *display;
 	CamelInternetAddress *cia;
-	EWebView *web_view;
+	GtkWidget *web_view;
 	CamelURL *curl;
 	const gchar *uri;
 	gchar *email;
@@ -205,11 +205,13 @@ action_add_to_address_book_cb (GtkAction *action,
 	/* This action is defined in EMailDisplay. */
 
 	backend = e_mail_reader_get_backend (reader);
-	formatter = e_mail_reader_get_formatter (reader);
+	display = e_mail_reader_get_mail_display (reader);
 
-	web_view = em_format_html_get_web_view (formatter);
+	web_view = gtk_container_get_focus_child (GTK_CONTAINER  (display));
+	if (!E_IS_WEB_VIEW (web_view))
+		return;
 
-	uri = e_web_view_get_selected_uri (web_view);
+	uri = e_web_view_get_selected_uri (E_WEB_VIEW (web_view));
 	g_return_if_fail (uri != NULL);
 
 	curl = camel_url_new (uri, NULL);
@@ -245,17 +247,20 @@ action_mail_charset_cb (GtkRadioAction *action,
                         GtkRadioAction *current,
                         EMailReader *reader)
 {
+	EMailDisplay *display;
 	EMFormatHTML *formatter;
 	const gchar *charset;
 
 	if (action != current)
 		return;
 
-	formatter = e_mail_reader_get_formatter (reader);
+	display = e_mail_reader_get_mail_display (reader);
+	formatter = e_mail_display_get_formatter (display);
 	charset = g_object_get_data (G_OBJECT (action), "charset");
 
 	/* Charset for "Default" action will be NULL. */
-	em_format_set_charset (EM_FORMAT (formatter), charset);
+	if (formatter)
+		em_format_set_charset (EM_FORMAT (formatter), charset);
 }
 
 static void
@@ -432,42 +437,38 @@ static void
 action_mail_flag_clear_cb (GtkAction *action,
                            EMailReader *reader)
 {
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 	CamelFolder *folder;
 	GtkWindow *window;
 	GPtrArray *uids;
 
 	folder = e_mail_reader_get_folder (reader);
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
 	uids = e_mail_reader_get_selected_uids (reader);
 	window = e_mail_reader_get_window (reader);
 
 	em_utils_flag_for_followup_clear (window, folder, uids);
 
-	e_web_view_reload (web_view);
+	e_mail_display_reload (display);
 }
 
 static void
 action_mail_flag_completed_cb (GtkAction *action,
                                EMailReader *reader)
 {
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 	CamelFolder *folder;
 	GtkWindow *window;
 	GPtrArray *uids;
 
 	folder = e_mail_reader_get_folder (reader);
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
 	uids = e_mail_reader_get_selected_uids (reader);
 	window = e_mail_reader_get_window (reader);
 
 	em_utils_flag_for_followup_completed (window, folder, uids);
 
-	e_web_view_reload (web_view);
+	e_mail_display_reload (display);
 }
 
 static void
@@ -661,9 +662,11 @@ static void
 action_mail_load_images_cb (GtkAction *action,
                             EMailReader *reader)
 {
+	EMailDisplay *display;
 	EMFormatHTML *formatter;
 
-	formatter = e_mail_reader_get_formatter (reader);
+	display = e_mail_reader_get_mail_display (reader);
+	formatter = e_mail_display_get_formatter (display);
 
 	em_format_html_load_images (formatter);
 }
@@ -1569,20 +1572,14 @@ static void
 action_mail_show_all_headers_cb (GtkToggleAction *action,
                                  EMailReader *reader)
 {
-	EMFormatHTML *formatter;
-	EMFormatMode mode;
+	EMailDisplay *display;
 
-	formatter = e_mail_reader_get_formatter (reader);
-
-	if (!formatter)
-		return;
+	display = e_mail_reader_get_mail_display (reader);
 
 	if (gtk_toggle_action_get_active (action))
-		mode = EM_FORMAT_MODE_ALLHEADERS;
+		e_mail_display_set_mode (display, E_MAIL_DISPLAY_MODE_ALL_HEADERS);
 	else
-		mode = EM_FORMAT_MODE_NORMAL;
-
-	em_format_set_mode (EM_FORMAT (formatter), mode);
+		e_mail_display_set_mode (display, E_MAIL_DISPLAY_MODE_NORMAL);
 }
 
 static void
@@ -1590,7 +1587,7 @@ action_mail_show_source_cb (GtkAction *action,
                             EMailReader *reader)
 {
 	EMailBackend *backend;
-	EMFormatHTML *formatter;
+	EMailDisplay *display;
 	CamelFolder *folder;
 	GtkWidget *browser;
 	GPtrArray *uids;
@@ -1598,21 +1595,15 @@ action_mail_show_source_cb (GtkAction *action,
 
 	backend = e_mail_reader_get_backend (reader);
 	folder = e_mail_reader_get_folder (reader);
+	display = e_mail_reader_get_mail_display (reader);
 
 	uids = e_mail_reader_get_selected_uids (reader);
 	g_return_if_fail (uids != NULL && uids->len == 1);
 	message_uid = g_ptr_array_index (uids, 0);
 
-	browser = e_mail_browser_new (backend);
-	reader = E_MAIL_READER (browser);
-	formatter = e_mail_reader_get_formatter (reader);
+	browser = e_mail_browser_new (backend, folder, message_uid,
+			E_MAIL_DISPLAY_MODE_SOURCE);
 
-	if (formatter != NULL)
-		em_format_set_mode (
-			EM_FORMAT (formatter), EM_FORMAT_MODE_SOURCE);
-
-	e_mail_reader_set_folder (reader, folder);
-	e_mail_reader_set_message (reader, message_uid);
 	gtk_widget_show (browser);
 
 	em_utils_uids_free (uids);
@@ -1664,39 +1655,33 @@ static void
 action_mail_zoom_100_cb (GtkAction *action,
                          EMailReader *reader)
 {
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
 
-	e_web_view_zoom_100 (web_view);
+	e_mail_display_zoom_100 (display);
 }
 
 static void
 action_mail_zoom_in_cb (GtkAction *action,
                         EMailReader *reader)
 {
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
 
-	e_web_view_zoom_in (web_view);
+	e_mail_display_zoom_in (display);
 }
 
 static void
 action_mail_zoom_out_cb (GtkAction *action,
                          EMailReader *reader)
 {
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
 
-	e_web_view_zoom_out (web_view);
+	e_mail_display_zoom_out (display);
 }
 
 static void
@@ -1705,7 +1690,7 @@ action_search_folder_recipient_cb (GtkAction *action,
 {
 	EMailBackend *backend;
 	EMailSession *session;
-	EMFormatHTML *formatter;
+	EMailDisplay *display;
 	EWebView *web_view;
 	CamelFolder *folder;
 	CamelURL *curl;
@@ -1714,9 +1699,8 @@ action_search_folder_recipient_cb (GtkAction *action,
 	/* This action is defined in EMailDisplay. */
 
 	folder = e_mail_reader_get_folder (reader);
-	formatter = e_mail_reader_get_formatter (reader);
-
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
+	web_view = e_mail_display_get_current_web_view (display);
 
 	uri = e_web_view_get_selected_uri (web_view);
 	g_return_if_fail (uri != NULL);
@@ -1746,7 +1730,7 @@ action_search_folder_sender_cb (GtkAction *action,
 {
 	EMailBackend *backend;
 	EMailSession *session;
-	EMFormatHTML *formatter;
+	EMailDisplay *display;
 	EWebView *web_view;
 	CamelFolder *folder;
 	CamelURL *curl;
@@ -1755,9 +1739,8 @@ action_search_folder_sender_cb (GtkAction *action,
 	/* This action is defined in EMailDisplay. */
 
 	folder = e_mail_reader_get_folder (reader);
-	formatter = e_mail_reader_get_formatter (reader);
-
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
+	web_view = e_mail_display_get_current_web_view (display);
 
 	uri = e_web_view_get_selected_uri (web_view);
 	g_return_if_fail (uri != NULL);
@@ -2507,15 +2490,16 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
                                EMailReaderClosure *closure)
 {
 	EMailReader *reader;
+	EMailDisplay *display;
 	EMailReaderPrivate *priv;
 	CamelMimeMessage *message = NULL;
-	EMFormatHTML *formatter;
 	GtkWidget *message_list;
 	EMailBackend *backend;
 	EShellBackend *shell_backend;
 	EShellSettings *shell_settings;
 	EShell *shell;
 	EWebView *web_view;
+	EMFormatHTMLDisplay *formatter;
 	EMEvent *event;
 	EMEventTargetMessage *target;
 	const gchar *message_uid;
@@ -2523,6 +2507,7 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 	gboolean schedule_timeout;
 	gint timeout_interval;
 	GError *error = NULL;
+	SoupSession *session;
 
 	reader = closure->reader;
 	message_uid = closure->message_uid;
@@ -2547,9 +2532,8 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 	}
 
 	backend = e_mail_reader_get_backend (reader);
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
 	message_list = e_mail_reader_get_message_list (reader);
+	display = e_mail_reader_get_mail_display (reader);
 
 	if (!message_list) {
 		/* for cases where message fetching took so long that
@@ -2560,8 +2544,6 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 	shell_backend = E_SHELL_BACKEND (backend);
 	shell = e_shell_backend_get_shell (shell_backend);
 	shell_settings = e_shell_get_shell_settings (shell);
-
-	web_view = em_format_html_get_web_view (formatter);
 
 	/** @Event: message.reading
 	 * @Title: Viewing a message
@@ -2576,13 +2558,18 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 		(EEvent *) event, "message.reading",
 		(EEventTarget *) target);
 
+	mail_uri = em_format_build_mail_uri (folder, message_uid, NULL);
 
-	/* Initialize formatter */
-	em_format_format_clone (EM_FORMAT (formatter), folder, message_uid, message, NULL, NULL);
+	session = webkit_get_default_session ();
+	if ((formatter = g_object_get_data (G_OBJECT (session), mail_uri)) == NULL) {
+		formatter = em_format_html_display_new ();
+		EM_FORMAT (formatter)->message_uid = g_strdup (message_uid);
+		em_format_parse (EM_FORMAT (formatter), message, folder, NULL);
+		g_object_set_data (G_OBJECT (session), mail_uri, formatter);
+	}
 
-	/* Start formatting */
-	mail_uri = em_format_build_mail_uri (folder, message_uid, NULL, EM_FORMAT (formatter));
-	e_web_view_load_uri (web_view, mail_uri);
+	e_mail_display_set_formatter (display, EM_FORMAT_HTML (formatter));
+	e_mail_display_load (display, mail_uri);
 	g_free (mail_uri);
 
 	/* Reset the shell view icon. */
@@ -2617,10 +2604,12 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 			mail_reader_closure_free);
 
 	} else if (error != NULL) {
+		/* FIXME WEBKIT
 		e_alert_submit (
 			E_ALERT_SINK (web_view),
 			"mail:no-retrieve-message",
 			error->message, NULL);
+		*/
 		g_error_free (error);
 	}
 
@@ -2637,9 +2626,8 @@ static gboolean
 mail_reader_message_selected_timeout_cb (EMailReader *reader)
 {
 	EMailReaderPrivate *priv;
-	EMFormatHTML *formatter;
+	EMailDisplay *display;
 	GtkWidget *message_list;
-	EWebView *web_view;
 	CamelFolder *folder;
 	const gchar *cursor_uid;
 	const gchar *format_uid;
@@ -2648,49 +2636,35 @@ mail_reader_message_selected_timeout_cb (EMailReader *reader)
 
 	folder = e_mail_reader_get_folder (reader);
 
-	formatter = e_mail_reader_get_formatter (reader);
 	message_list = e_mail_reader_get_message_list (reader);
+	display = e_mail_reader_get_mail_display (reader);
 
 	cursor_uid = MESSAGE_LIST (message_list)->cursor_uid;
-	format_uid = EM_FORMAT (formatter)->uid;
-
-	web_view = em_format_html_get_web_view (formatter);
+	//format_uid = EM_FORMAT (formatter)->message_uid;
 
 	if (MESSAGE_LIST (message_list)->last_sel_single) {
 		GtkWidget *widget;
-		gboolean web_view_visible;
+		gboolean display_visible;
 		gboolean selected_uid_changed;
 
 		/* Decide whether to download the full message now. */
+		widget = GTK_WIDGET (display);
 
-		widget = GTK_WIDGET (web_view);
+		display_visible = gtk_widget_get_mapped (widget);
 
-		web_view_visible = gtk_widget_get_mapped (widget);
-		selected_uid_changed = g_strcmp0 (cursor_uid, format_uid);
+		/* FIXME WEBKIT */
+		//selected_uid_changed = g_strcmp0 (cursor_uid, format_uid);
 
-		if (web_view_visible && selected_uid_changed) {
+		//if (display_visible && selected_uid_changed) {
+		if (display_visible) {
 			EMailReaderClosure *closure;
 			GCancellable *cancellable;
 			EActivity *activity;
-			gchar *string, *html;
+			gchar *string;
 
-			string = g_strdup_printf (
-				_("Retrieving message '%s'"), cursor_uid);
-
-			html = g_strdup_printf ("<html><head></head><body>"
-						"<table width=\"100%%\" height=\"100%%\"><tr>"
-						"<td valign=\"middle\" align=\"center\"><h5>%s</h5></td>"
-						"</tr></table>"
-						"</body></html>",
-						string);
-#if HAVE_CLUTTER
-			if (!e_shell_get_express_mode (e_shell_get_default ()))
-				e_web_view_load_string (web_view, html);
-#else
-			e_web_view_load_string (web_view, html);
-#endif
+			string = g_strdup_printf (_("Retrieving message '%s'"), cursor_uid);
+			e_mail_display_set_status (display, string);
 			g_free (string);
-			g_free (html);
 
 			activity = e_mail_reader_new_activity (reader);
 			cancellable = e_activity_get_cancellable (activity);
@@ -2710,8 +2684,6 @@ mail_reader_message_selected_timeout_cb (EMailReader *reader)
 			priv->retrieving_message = g_object_ref (cancellable);
 		}
 	} else {
-		e_web_view_load_string (web_view, "");
-
 		priv->restoring_message_selection = FALSE;
 	}
 
@@ -2801,8 +2773,7 @@ mail_reader_set_folder (EMailReader *reader,
                         CamelFolder *folder)
 {
 	EMailReaderPrivate *priv;
-	EMFormatHTML *formatter;
-	EWebView *web_view;
+	EMailDisplay *display;
 	CamelFolder *previous_folder;
 	GtkWidget *message_list;
 	EMailBackend *backend;
@@ -2812,8 +2783,7 @@ mail_reader_set_folder (EMailReader *reader,
 	priv = E_MAIL_READER_GET_PRIVATE (reader);
 
 	backend = e_mail_reader_get_backend (reader);
-	formatter = e_mail_reader_get_formatter (reader);
-	web_view = em_format_html_get_web_view (formatter);
+	display = e_mail_reader_get_mail_display (reader);
 	message_list = e_mail_reader_get_message_list (reader);
 
 	previous_folder = e_mail_reader_get_folder (reader);
@@ -2833,7 +2803,7 @@ mail_reader_set_folder (EMailReader *reader,
 		em_utils_folder_is_outbox (folder) ||
 		em_utils_folder_is_sent (folder));
 
-	e_web_view_load_string (web_view, "");
+	e_mail_display_clear (display);
 
 	priv->folder_was_just_selected = (folder != NULL);
 
@@ -3405,9 +3375,7 @@ e_mail_reader_init (EMailReader *reader,
                     gboolean init_actions,
                     gboolean connect_signals)
 {
-	EMFormatHTML *formatter;
 	EMenuToolAction *menu_tool_action;
-	EWebView *web_view;
 	GtkActionGroup *action_group;
 	GtkWidget *message_list;
 	GConfBridge *bridge;
@@ -3422,10 +3390,7 @@ e_mail_reader_init (EMailReader *reader,
 
 	g_return_if_fail (E_IS_MAIL_READER (reader));
 
-	formatter = e_mail_reader_get_formatter (reader);
 	message_list = e_mail_reader_get_message_list (reader);
-
-	web_view = em_format_html_get_web_view (formatter);
 
 	if (!init_actions)
 		goto connect_signals;
@@ -3561,6 +3526,7 @@ e_mail_reader_init (EMailReader *reader,
 	gtk_action_set_is_important (action, TRUE);
 	gtk_action_set_short_label (action, _("Reply"));
 
+	/* FIXME WEBKIT
 	action_name = "add-to-address-book";
 	action = e_web_view_get_action (web_view, action_name);
 	g_signal_connect (
@@ -3584,7 +3550,7 @@ e_mail_reader_init (EMailReader *reader,
 	g_signal_connect (
 		action, "activate",
 		G_CALLBACK (action_search_folder_sender_cb), reader);
-
+	*/
 #ifndef G_OS_WIN32
 	/* Lockdown integration. */
 
@@ -3625,21 +3591,24 @@ e_mail_reader_init (EMailReader *reader,
 	action_name = "mail-caret-mode";
 	action = e_mail_reader_get_action (reader, action_name);
 
+	/* FIXME WEBKIT
 	g_object_bind_property (
 		action, "active",
 		web_view, "caret-mode",
 		G_BINDING_BIDIRECTIONAL |
 		G_BINDING_SYNC_CREATE);
-
+	*/
 connect_signals:
 
 	if (!connect_signals)
 		goto init_private;
 
 	/* Connect signals. */
+	/* WEBKIT FIXME
 	g_signal_connect_swapped (
 		web_view, "key-press-event",
 		G_CALLBACK (mail_reader_key_press_event_cb), reader);
+	 */
 
 	g_signal_connect_swapped (
 		message_list, "message-selected",
@@ -3945,17 +3914,17 @@ e_mail_reader_get_backend (EMailReader *reader)
 	return interface->get_backend (reader);
 }
 
-EMFormatHTML *
-e_mail_reader_get_formatter (EMailReader *reader)
+EMailDisplay *
+e_mail_reader_get_mail_display (EMailReader *reader)
 {
 	EMailReaderInterface *interface;
 
 	g_return_val_if_fail (E_IS_MAIL_READER (reader), NULL);
 
 	interface = E_MAIL_READER_GET_INTERFACE (reader);
-	g_return_val_if_fail (interface->get_formatter != NULL, NULL);
+	g_return_val_if_fail (interface->get_mail_display != NULL, NULL);
 
-	return interface->get_formatter (reader);
+	return interface->get_mail_display (reader);
 }
 
 gboolean

@@ -831,12 +831,11 @@ action_mail_smart_backward_cb (GtkAction *action,
 	EMailShellContent *mail_shell_content;
 	EMailShellSidebar *mail_shell_sidebar;
 	EMFolderTree *folder_tree;
-	EMFormatHTML *formatter;
 	EMailReader *reader;
 	EMailView *mail_view;
 	GtkWidget *message_list;
 	GtkToggleAction *toggle_action;
-	EWebView *web_view;
+	EMailDisplay *display;
 	gboolean caret_mode;
 	gboolean magic_spacebar;
 
@@ -854,7 +853,7 @@ action_mail_smart_backward_cb (GtkAction *action,
 	folder_tree = e_mail_shell_sidebar_get_folder_tree (mail_shell_sidebar);
 
 	reader = E_MAIL_READER (mail_view);
-	formatter = e_mail_reader_get_formatter (reader);
+	display = e_mail_reader_get_mail_display (reader);
 	message_list = e_mail_reader_get_message_list (reader);
 
 	magic_spacebar = e_shell_settings_get_boolean (
@@ -863,10 +862,9 @@ action_mail_smart_backward_cb (GtkAction *action,
 	toggle_action = GTK_TOGGLE_ACTION (ACTION (MAIL_CARET_MODE));
 	caret_mode = gtk_toggle_action_get_active (toggle_action);
 
-	web_view = em_format_html_get_web_view (formatter);
-
-	if (e_web_view_scroll_backward (web_view))
-		return;
+	/* FIXME WEBKIT FUCKING IMPLEMENT
+	gtk_scrolled_window_scroll (display, GTK_MOVEMENT_PAGES, -1);
+	*/
 
 	if (caret_mode || !magic_spacebar)
 		return;
@@ -907,7 +905,7 @@ action_mail_smart_forward_cb (GtkAction *action,
 	EMailView *mail_view;
 	GtkWidget *message_list;
 	GtkToggleAction *toggle_action;
-	EWebView *web_view;
+	EMailDisplay *display;
 	gboolean caret_mode;
 	gboolean magic_spacebar;
 
@@ -925,7 +923,7 @@ action_mail_smart_forward_cb (GtkAction *action,
 	folder_tree = e_mail_shell_sidebar_get_folder_tree (mail_shell_sidebar);
 
 	reader = E_MAIL_READER (mail_view);
-	formatter = e_mail_reader_get_formatter (reader);
+	display = e_mail_reader_get_mail_display (reader);
 	message_list = e_mail_reader_get_message_list (reader);
 
 	magic_spacebar = e_shell_settings_get_boolean (
@@ -934,10 +932,10 @@ action_mail_smart_forward_cb (GtkAction *action,
 	toggle_action = GTK_TOGGLE_ACTION (ACTION (MAIL_CARET_MODE));
 	caret_mode = gtk_toggle_action_get_active (toggle_action);
 
-	web_view = em_format_html_get_web_view (formatter);
+	/* FIXME WEBKIT: Fucking implement
+	gtk_scolled_window_scroll (display, GTK_MOVEMENT_PAGES, 1);
+	*/
 
-	if (e_web_view_scroll_forward (web_view))
-		return;
 
 	if (caret_mode || !magic_spacebar)
 		return;
