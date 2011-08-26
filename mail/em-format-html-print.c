@@ -81,6 +81,7 @@ efhp_init (GObject *o)
 	EMFormatHTMLPrint *efhp = (EMFormatHTMLPrint *) o;
 	EWebView *web_view;
 
+	/* FIXME WEBKIT: this ain't gonna work
 	web_view = em_format_html_get_web_view (EM_FORMAT_HTML (efhp));
 
 	/* gtk widgets don't like to be realized outside top level widget
@@ -89,7 +90,10 @@ efhp_init (GObject *o)
 	gtk_container_add (GTK_CONTAINER (efhp->window), GTK_WIDGET (web_view));
 	gtk_widget_realize (GTK_WIDGET (web_view));
 	efhp->parent.show_icon = FALSE;
+	*/
+	/* FIXME WEBKIT
 	((EMFormat *) efhp)->print = TRUE;
+	*/
 }
 
 GType
@@ -206,10 +210,8 @@ emfhp_complete (EMFormatHTMLPrint *efhp)
 	EWebView *web_view;
 	GError *error = NULL;
 
-	web_view = em_format_html_get_web_view (EM_FORMAT_HTML (efhp));
-
 	operation = e_print_operation_new ();
-
+/* FIXME WEBKIT: Port to webkit's API, probably from outside
 	gtk_html_print_operation_run (
 		GTK_HTML (web_view),
 		operation, efhp->action, NULL,
@@ -218,7 +220,7 @@ emfhp_complete (EMFormatHTMLPrint *efhp)
 		(GtkHTMLPrintDrawFunc) NULL,
 		(GtkHTMLPrintDrawFunc) efhp_draw_footer,
 		NULL, &error);
-
+*/
 	g_object_unref (operation);
 }
 
@@ -243,8 +245,5 @@ em_format_html_print_message (EMFormatHTMLPrint *efhp,
 		efhp, "complete", G_CALLBACK (emfhp_complete), efhp);
 
 	/* FIXME Not passing a GCancellable here. */
-	em_format_format_clone (
-		EM_FORMAT (efhp),
-		folder, message_uid, message,
-		EM_FORMAT (efhp->source), NULL);
+	em_format_parse (EM_FORMAT (efhp), message, folder, NULL);
 }
