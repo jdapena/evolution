@@ -36,10 +36,10 @@
 
 #define d(x)
 
-typedef struct _VCardInlinePObject VCardInlinePObject;
+typedef struct _VCardInlinePURI VCardInlinePURI;
 
-struct _VCardInlinePObject {
-	EMFormatHTMLPObject object;
+struct _VCardInlinePURI {
+	EMFormatPURI puri;
 
 	GSList *contact_list;
 	ESourceList *source_list;
@@ -61,11 +61,11 @@ e_plugin_lib_enable (EPlugin *ep,
 }
 
 static void
-org_gnome_vcard_inline_pobject_free (EMFormatHTMLPObject *object)
+org_gnome_vcard_inline_pobject_free (EMFormatPURI *object)
 {
-	VCardInlinePObject *vcard_object;
+	VCardInlinePURI *vcard_object;
 
-	vcard_object = (VCardInlinePObject *) object;
+	vcard_object = (VCardInlinePURI *) object;
 
 	e_client_util_free_object_slist (vcard_object->contact_list);
 	vcard_object->contact_list = NULL;
@@ -87,7 +87,7 @@ org_gnome_vcard_inline_pobject_free (EMFormatHTMLPObject *object)
 }
 
 static void
-org_gnome_vcard_inline_decode (VCardInlinePObject *vcard_object,
+org_gnome_vcard_inline_decode (VCardInlinePURI *vcard_object,
                                CamelMimePart *mime_part)
 {
 	CamelDataWrapper *data_wrapper;
@@ -157,7 +157,7 @@ org_gnome_vcard_inline_client_loaded_cb (ESource *source,
 }
 
 static void
-org_gnome_vcard_inline_save_cb (VCardInlinePObject *vcard_object)
+org_gnome_vcard_inline_save_cb (VCardInlinePURI *vcard_object)
 {
 	ESource *source;
 	GSList *contact_list;
@@ -192,7 +192,7 @@ org_gnome_vcard_inline_save_cb (VCardInlinePObject *vcard_object)
 }
 
 static void
-org_gnome_vcard_inline_toggle_cb (VCardInlinePObject *vcard_object,
+org_gnome_vcard_inline_toggle_cb (VCardInlinePURI *vcard_object,
                                   GtkButton *button)
 {
 	EABContactDisplay *contact_display;
@@ -215,19 +215,20 @@ org_gnome_vcard_inline_toggle_cb (VCardInlinePObject *vcard_object,
 	gtk_button_set_label (button, label);
 }
 
-static gboolean
-org_gnome_vcard_inline_embed (EMFormatHTML *format,
-                              GtkHTMLEmbedded *embedded,
-                              EMFormatHTMLPObject *object)
+static GtkWidget*
+org_gnome_vcard_inline_embed (EMFormat *emf,
+                              EMFormatPURI *object,
+                              GCancellable *cancellable)
 {
-	VCardInlinePObject *vcard_object;
+	VCardInlinePURI *vcard_object;
 	GtkWidget *button_box;
 	GtkWidget *container;
 	GtkWidget *widget;
+	GtkWidget *layout;
 	EContact *contact;
 	guint length;
 
-	vcard_object = (VCardInlinePObject *) object;
+	vcard_object = (VCardInlinePURI *) object;
 	length = g_slist_length (vcard_object->contact_list);
 
 	if (vcard_object->contact_list != NULL)
@@ -235,13 +236,10 @@ org_gnome_vcard_inline_embed (EMFormatHTML *format,
 	else
 		contact = NULL;
 
-	container = GTK_WIDGET (embedded);
+	layout = gtk_vbox_new (FALSE, 0);
+	gtk_widget_show (layout);
 
-	widget = gtk_vbox_new (FALSE, 0);
-	gtk_container_add (GTK_CONTAINER (container), widget);
-	gtk_widget_show (widget);
-
-	container = widget;
+	container = layout;
 
 	widget = gtk_hbutton_box_new ();
 	gtk_button_box_set_layout (
@@ -313,14 +311,14 @@ org_gnome_vcard_inline_embed (EMFormatHTML *format,
 		G_CALLBACK (org_gnome_vcard_inline_save_cb),
 		vcard_object);
 
-	return TRUE;
+	return layout;
 }
 
 void
 org_gnome_vcard_inline_format (gpointer ep,
                                EMFormatHookTarget *target)
 {
-	VCardInlinePObject *vcard_object;
+	VCardInlinePURI *vcard_object;
 	gchar *classid;
 	gchar *content;
 
@@ -328,23 +326,23 @@ org_gnome_vcard_inline_format (gpointer ep,
 		"org-gnome-vcard-inline-display-%d",
 		org_gnome_vcard_inline_classid++);
 
-	vcard_object = (VCardInlinePObject *)
-		em_format_html_add_pobject (
-			EM_FORMAT_HTML (target->format),
-			sizeof (VCardInlinePObject),
-			classid, target->part,
-			org_gnome_vcard_inline_embed);
+	vcard_object = (VCardInlinePURI *) em_format_puri_new (
+			target->format, sizeof(VCardInlinePURI), target->part, classid);
+	vcard_object->puri.widget_func = org_gnome_vcard_inline_embed;
+	vcard_object->puri.free = org_gnome_vcard_inline_pobject_free;
+
+	em_format_add_puri (target->format, (EMFormatPURI *) vcard_object);
 
 	g_object_ref (target->part);
-
-	vcard_object->object.free = org_gnome_vcard_inline_pobject_free;
 	org_gnome_vcard_inline_decode (vcard_object, target->part);
 
 	e_book_client_get_sources (&vcard_object->source_list, NULL);
 
+	/* FIXME WEBKIT: No streams, right?
 	content = g_strdup_printf ("<object classid=%s></object>", classid);
 	camel_stream_write_string (target->stream, content, NULL, NULL);
 	g_free (content);
+	*/
 
 	g_free (classid);
 }
