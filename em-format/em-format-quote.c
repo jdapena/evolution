@@ -592,7 +592,7 @@ emfq_format_headers (EMFormatQuote *emfq,
 
 static void
 emfq_write_message_prefix (EMFormat *emf,
-			   EMFormatPURI *puri
+			   EMFormatPURI *puri,
 			   CamelStream *stream,
 			   GCancellable *cancellable)
 {

@@ -368,7 +368,7 @@ static void
 efhd_parse (EMFormat *emf,
 	    CamelMimeMessage *msg,
 	    CamelFolder *folder,
-	    Cancellable *cancellable)
+	    GCancellable *cancellable)
 {
 	EMFormatHTMLDisplay *efhd;
 
