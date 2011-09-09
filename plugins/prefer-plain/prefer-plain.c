@@ -85,7 +85,6 @@ make_part_attachment (EMFormat *format,
 
 		g_object_unref (new_part);
 	} else {
-		/* FIXME Not passing a GCancellable here. */
 		em_format_parse_part (format, part, part_id, &info, cancellable);
 	}
 }
@@ -146,7 +145,6 @@ org_gnome_prefer_plain_multipart_alternative (gpointer ep,
 	CamelMimePart *part, *display_part = NULL, *calendar_part = NULL;
 	gint i, nparts, partidlen, displayid = 0, calendarid = 0;
 
-	/* FIXME: this part-id stuff is poking private data, needs api */
 	partidlen = t->part_id->len;
 
 	if (epp_mode == EPP_NORMAL) {
@@ -192,11 +190,11 @@ org_gnome_prefer_plain_multipart_alternative (gpointer ep,
 		} else {
 			/* FIXME Not passing a GCancellable here. */
 			t->info->handler->old->parse_func (
-				t->format, display_part, t->part_id,
-				t->info, NULL);
+				t->format, t->part, t->part_id, t->info, NULL);
 		}
 		return;
 	} else if (!CAMEL_IS_MULTIPART (mp)) {
+		/* FIXME Not passing GCancellable here. */
 		em_format_parse_part_as (t->format, t->part, t->part_id, t->info, "x-evolution/message/source", NULL);
 		return;
 	}
