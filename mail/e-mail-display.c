@@ -48,6 +48,8 @@ struct _EMailDisplayPrivate {
 	EMFormatHTML *formatter;
 
 	EMailDisplayMode display_mode;
+
+	GList *webviews;
 };
 
 enum {
@@ -220,6 +222,11 @@ mail_display_dispose (GObject *object)
 	if (priv->searchbar) {
 		g_object_unref (priv->searchbar);
 		priv->searchbar = NULL;
+	}
+
+	if (priv->webviews) {
+		g_list_free (priv->webviews);
+		priv->webviews = NULL;
 	}
 
 	/* Chain up to parent's dispose() method. */
@@ -453,7 +460,8 @@ mail_display_insert_web_view (EMailDisplay *display,
 #if 0
 	GtkWidget *scrolled_window;
 
-	display->widgets = g_list_append (display->widgets, GTK_WIDGET (web_view));
+	display->priv->webviews = g_list_append (display->priv->webviews, web_view);
+
 	scrolled_window = gtk_scrolled_window_new (NULL, NULL);
 	g_object_set (G_OBJECT (scrolled_window),
 		"hscrollbar-policy", GTK_POLICY_NEVER,
@@ -461,16 +469,13 @@ mail_display_insert_web_view (EMailDisplay *display,
 		"shadow-type", GTK_SHADOW_NONE, NULL);
 		//"min-content-height", 300, NULL);
 	gtk_container_add (GTK_CONTAINER (scrolled_window), GTK_WIDGET (web_view));
-	display->widgets = g_list_append (display->widgets, scrolled_window);
 
 	gtk_box_pack_start (GTK_BOX (display->priv->vbox), scrolled_window, expandable, TRUE, 0);
 	gtk_widget_show_all (scrolled_window);
 #endif
 
 	gtk_box_pack_start (GTK_BOX (display->priv->vbox), GTK_WIDGET (web_view), expandable, TRUE, 0);
-	display->widgets = g_list_append (display->widgets, GTK_WIDGET (web_view));
 	gtk_widget_show_all (GTK_WIDGET (web_view));
-
 }
 
 static void
@@ -530,6 +535,7 @@ mail_display_init (EMailDisplay *display)
 	g_value_set_int (&margin, 10);
 	g_object_set_property (G_OBJECT (display->priv->vbox), "margin", &margin);
 
+	display->priv->webviews = NULL;
 
 	/* WEBKIT TODO: ESearchBar */
 
@@ -656,8 +662,7 @@ e_mail_display_load (EMailDisplay *display,
 	attachment_store = NULL;
 	puri = g_hash_table_lookup (emf->mail_part_table, "attachment-bar:");
 	if (puri && puri->widget_func) {
-		attachment_bar = puri->widget_func (emf, puri, NULL);
-		display->widgets = g_list_append (display->widgets, attachment_bar);
+		attachment_bar = g_object_ref (puri->widget_func (emf, puri, NULL));
 		gtk_box_pack_start (box, attachment_bar, TRUE, TRUE, 0);
 		attachment_store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (attachment_bar));
 		gtk_widget_show (attachment_bar);
@@ -676,7 +681,6 @@ e_mail_display_load (EMailDisplay *display,
 				g_message ("Part %s didn't provide a valid widget, skipping!", puri->uri);
 				continue;
 			}
-			display->widgets = g_list_append (display->widgets, widget);
 			gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
 			gtk_widget_show (widget);
 
@@ -709,9 +713,8 @@ e_mail_display_reload (EMailDisplay *display)
 
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
-	for (iter = display->widgets; iter; iter = iter->next) {
-		if (E_IS_WEB_VIEW (iter->data))
-			e_web_view_reload (E_WEB_VIEW (iter->data));
+	for (iter = display->priv->webviews; iter; iter = iter->next) {
+		e_web_view_reload ((EWebView *) (iter->data));
 	}
 }
 
@@ -743,8 +746,18 @@ e_mail_display_set_status (EMailDisplay *display,
 	label = gtk_label_new (status);
 	gtk_box_pack_start (GTK_BOX (display->priv->vbox), label, TRUE, TRUE, 0);
 	gtk_widget_show_all (display->priv->vbox);
+}
 
-	display->widgets = g_list_append (display->widgets, label);
+static void
+remove_widget (GtkWidget *widget, gpointer user_data)
+{
+	EMailDisplay *display = user_data;
+
+	gtk_container_remove  (GTK_CONTAINER (display->priv->vbox), widget);
+
+	/* We must not destroy attachment bar, it's owned by EMFormatHTMLDisplay */
+	if  (!E_IS_ATTACHMENT_VIEW (widget))
+		gtk_widget_destroy (widget);
 }
 
 void
@@ -754,9 +767,11 @@ e_mail_display_clear (EMailDisplay *display)
 
 	gtk_widget_hide (display->priv->vbox);
 
-	g_list_free_full (display->widgets,
-			(GDestroyNotify) gtk_widget_destroy);
-	display->widgets = NULL;
+	gtk_container_foreach (GTK_CONTAINER (display->priv->vbox),
+		(GtkCallback) remove_widget, display);
+
+	g_list_free (display->priv->webviews);
+	display->priv->webviews = NULL;
 }
 
 ESearchBar*
