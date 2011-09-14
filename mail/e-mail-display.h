@@ -58,15 +58,12 @@ typedef enum {
 } EMailDisplayMode;
 
 struct _EMailDisplay {
-	GtkScrolledWindow parent;
+	GtkViewport parent;
 	EMailDisplayPrivate *priv;
-
-	GtkWidget *headers;	/* EWebView */
-	GList *widgets;
 };
 
 struct _EMailDisplayClass {
-	GtkScrolledWindowClass parent_class;
+	GtkViewportClass parent_class;
 
 	/* TODO WEBKIT: popup-event signal */
 	/* TODO WEBKIT: status-message signal */

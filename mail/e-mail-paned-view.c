@@ -55,6 +55,7 @@ struct _EMailPanedViewPrivate {
 	GtkWidget *message_list;
 	GtkWidget *search_bar;
 
+	GtkWidget *display_scrolled_window;
 	EMailDisplay *display;
 	GalViewInstance *view_instance;
 
@@ -614,6 +615,15 @@ mail_paned_view_constructed (GObject *object)
 	priv = E_MAIL_PANED_VIEW (object)->priv;
 
 	priv->display = g_object_new (E_TYPE_MAIL_DISPLAY, NULL);
+	widget = gtk_scrolled_window_new (NULL, NULL);
+	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (widget),
+		GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
+	gtk_scrolled_window_set_shadow_type (
+		GTK_SCROLLED_WINDOW (widget), GTK_SHADOW_NONE);
+	gtk_container_add (GTK_CONTAINER (widget), GTK_WIDGET (priv->display));
+	priv->display_scrolled_window = widget;
+	gtk_widget_show (GTK_WIDGET (priv->display));
+
 
 	view = E_MAIL_VIEW (object);
 	shell_view = e_mail_view_get_shell_view (view);
@@ -664,9 +674,7 @@ mail_paned_view_constructed (GObject *object)
 
 	container = priv->paned;
 
-	gtk_widget_show (GTK_WIDGET (priv->display));
-
-	widget = GTK_WIDGET (priv->display);
+	widget = GTK_WIDGET (priv->display_scrolled_window);
 	gtk_paned_pack2 (GTK_PANED (container), widget, FALSE, FALSE);
 	gtk_widget_show (widget);
 

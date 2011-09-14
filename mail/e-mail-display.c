@@ -457,7 +457,6 @@ mail_display_insert_web_view (EMailDisplay *display,
 			      EWebView *web_view,
 			      gboolean expandable)
 {
-#if 0
 	GtkWidget *scrolled_window;
 
 	display->priv->webviews = g_list_append (display->priv->webviews, web_view);
@@ -472,10 +471,11 @@ mail_display_insert_web_view (EMailDisplay *display,
 
 	gtk_box_pack_start (GTK_BOX (display->priv->vbox), scrolled_window, expandable, TRUE, 0);
 	gtk_widget_show_all (scrolled_window);
-#endif
 
+#if 0
 	gtk_box_pack_start (GTK_BOX (display->priv->vbox), GTK_WIDGET (web_view), expandable, TRUE, 0);
 	gtk_widget_show_all (GTK_WIDGET (web_view));
+#endif
 }
 
 static void
@@ -568,7 +568,7 @@ e_mail_display_get_type (void)
 		};
 
 		type = g_type_register_static (
-			GTK_TYPE_SCROLLED_WINDOW, "EMailDisplay", &type_info, 0);
+			GTK_TYPE_VIEWPORT, "EMailDisplay", &type_info, 0);
 	}
 
 	return type;
