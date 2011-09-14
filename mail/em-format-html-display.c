@@ -399,7 +399,7 @@ efhd_parse_attachment (EMFormat *emf,
 	puri->attachment = e_attachment_new ();
 	puri->attachment_view_part_id = g_strdup (classid);
 	puri->description = html;
-	puri->handle = info->handler;
+	puri->handle = handler;
 
 	cid = camel_mime_part_get_content_id (part);
 	if (cid)
@@ -885,8 +885,6 @@ efhd_attachment_button (EMFormat *emf,
 	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) efh;
 	EAttachmentStore *store;
 	EAttachment *attachment;
-	GFileInfo *finfo;
-	const gchar *name;
 	GtkWidget *widget;
 	gpointer parent;
 	guint32 size = 0;
@@ -925,7 +923,7 @@ efhd_attachment_button (EMFormat *emf,
 	e_attachment_set_shown (attachment, info->shown);
 	e_attachment_set_signed (attachment, info->sign);
 	e_attachment_set_encrypted (attachment, info->encrypt);
-	e_attachment_set_can_show (attachment, info->handle != NULL);
+	e_attachment_set_can_show (attachment, info->handle != NULL && info->handle->write_func);
 
 	/* FIXME: Try to find a better way? */
 	shell = e_shell_get_default ();
