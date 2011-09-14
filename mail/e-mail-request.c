@@ -7,7 +7,7 @@
 
 #include "em-format-html.h"
 
-#define d(x)
+#define d(x) x
 
 G_DEFINE_TYPE (EMailRequest, e_mail_request, SOUP_TYPE_REQUEST)
 
@@ -19,6 +19,7 @@ struct _EMailRequestPrivate {
 
 	CamelContentType *content_type;
 	gchar *mime_type;
+	gint content_length;
 
 	GHashTable *uri_query;
 };
@@ -64,15 +65,14 @@ start_mail_formatting (GSimpleAsyncResult *res,
 			em_format_html_format_headers (efh, request->priv->output_stream,
 				CAMEL_MEDIUM (emf->message), all_headers, cancellable);
 		} else {
-			EMFormatPURI *puri = g_hash_table_lookup (emf->mail_part_table, part_id);
+			EMFormatPURI *puri = em_format_find_puri (emf, part_id);
 			if (puri) {
 				em_format_puri_write (puri, request->priv->output_stream, NULL);
+				mail_request_set_content_type (request,
+					camel_mime_part_get_content_type (puri->part));
 			} else {
 				g_warning ("Failed to lookup requested part '%s' - this should not happen!", part_id);
 			}
-
-			mail_request_set_content_type (request,
-					camel_mime_part_get_content_type (puri->part));
 		}
 	}
 
@@ -90,9 +90,9 @@ start_mail_formatting (GSimpleAsyncResult *res,
 }
 
 static void
-get_image_content (GSimpleAsyncResult *res,
-	       	   GObject *object,
-		   GCancellable *cancellable)
+get_file_content (GSimpleAsyncResult *res,
+	       	  GObject *object,
+		  GCancellable *cancellable)
 {
 	EMailRequest *request = E_MAIL_REQUEST (object);
 	SoupURI *uri;
@@ -107,10 +107,12 @@ get_image_content (GSimpleAsyncResult *res,
 
 	if (g_file_get_contents (uri->path, &contents, &length, NULL)) {
 		CamelContentType *ct;
-		gchar *mime_type = g_content_type_guess (uri->path, NULL, 0, NULL);
-		ct = camel_content_type_decode (mime_type);
+		request->priv->mime_type = g_content_type_guess (uri->path, NULL, 0, NULL);
+		ct = camel_content_type_decode (request->priv->mime_type);
 		mail_request_set_content_type (request, ct);
 		camel_content_type_unref (ct);
+
+		request->priv->content_length = length;
 
 		stream = g_memory_input_stream_new_from_data (contents, length, NULL);
 		g_simple_async_result_set_op_res_gpointer (res, stream, NULL);
@@ -127,6 +129,9 @@ e_mail_request_init (EMailRequest *request)
 	request->priv->part = NULL;
 	request->priv->output_stream = NULL;
 	request->priv->uri_query = NULL;
+	request->priv->content_type = NULL;
+	request->priv->mime_type = NULL;
+	request->priv->content_length = 0;
 }
 
 static void
@@ -179,6 +184,9 @@ mail_request_send_async (SoupRequest *request,
 
 	session = soup_request_get_session (request);
 	uri = soup_request_get_uri (request);
+
+	d(printf("received request for %s\n", soup_uri_to_string (uri, FALSE)));
+
 	if (g_strcmp0 (uri->scheme, "mail") == 0) {
 		gchar *uri_str;
 
@@ -201,7 +209,7 @@ mail_request_send_async (SoupRequest *request,
 		/* WebKit won't allow us to load data through local file:// protocol, when using "remote" mail://
 		   protocol, so we have evo-file:// which WebKit thinks it's remote, but in fact it behaves like file:// */
 		result = g_simple_async_result_new (G_OBJECT (request), callback, user_data, mail_request_send_async);
-		g_simple_async_result_run_in_thread (result, get_image_content, G_PRIORITY_DEFAULT, cancellable);
+		g_simple_async_result_run_in_thread (result, get_file_content, G_PRIORITY_DEFAULT, cancellable);
 	}
 }
 
@@ -225,14 +233,16 @@ mail_request_get_content_length (SoupRequest *request)
 	GByteArray *ba;
 	gint content_length = 0;
 
-	if (emr->priv->output_stream) {
+	if (emr->priv->content_length > 0)
+		content_length = emr->priv->content_length;
+	else if (emr->priv->output_stream) {
 		ba = camel_stream_mem_get_byte_array (CAMEL_STREAM_MEM (emr->priv->output_stream));
 		if (ba) {
 			content_length = ba->len;
 		}
 	}
 
-	d(printf("Content-Length: %d bytes", content_length));
+	d(printf("Content-Length: %d bytes\n", content_length));
 	return content_length;
 }
 
@@ -241,27 +251,23 @@ mail_request_get_content_type (SoupRequest *request)
 {
 	EMailRequest *emr = E_MAIL_REQUEST (request);
 
-	if (emr->priv->mime_type)
-		g_free (emr->priv->mime_type);
+	if (emr->priv->mime_type) {
+		d(printf("Content-Type: %s\n", emr->priv->mime_type));
+		return emr->priv->mime_type;
+	}
 
 	if (emr->priv->content_type == NULL) {
-		emr->priv->mime_type = g_strdup ("text/html");
+		emr->priv->mime_type = g_strdup ("text/html; charset=utf-8");
 
-	/* For text/html return native content type, since it can contain
-	 * informations about charset
-	 */
-	} else if (camel_content_type_is (emr->priv->content_type, "text", "html")) {
-		emr->priv->mime_type = camel_content_type_format (emr->priv->content_type);
-
-	/* For any other text/* content type, return text/html, because we
+	/* For text/* content type, return text/html, because we
 	 * have converted it from whatever type it was to HTML */
 	} else if (camel_content_type_is (emr->priv->content_type, "text", "*")) {
-		emr->priv->mime_type = g_strdup ("text/html");
+		emr->priv->mime_type = g_strdup ("text/html; charset=utf-8");
 
 	/* For any other format return it's native format, because then it is
-	 * most probably image or something similar	 */
+	 * most probably image or something similar */
 	} else {
-		emr->priv->mime_type = camel_content_type_format (emr->priv->content_type);
+		emr->priv->mime_type = camel_content_type_simple (emr->priv->content_type);
 	}
 
 	d(printf("Content-Type: %s\n", emr->priv->mime_type));

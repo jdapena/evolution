@@ -88,8 +88,6 @@ struct _EMFormatAttachmentPURI {
 struct _EMFormatSMIMEPURI {
 	EMFormatPURI puri;
 
-	EMFormatWidgetFunc widget_func;
-
 	gchar *description;
 
 	gint signature;
@@ -114,8 +112,7 @@ EMFormatHTMLDisplay *
 		em_format_html_display_new	(void);
 EAttachmentView *
 		em_format_html_display_get_attachment_view
-						(EMFormatHTMLDisplay *html_display,
-						 const gchar *message_part_id);
+						(EMFormatHTMLDisplay *html_display);
 G_END_DECLS
 
 #endif /* EM_FORMAT_HTML_DISPLAY_H */

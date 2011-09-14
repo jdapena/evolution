@@ -46,6 +46,8 @@ struct _EMFormatPrivate {
 	gchar *charset;
 	gchar *default_charset;
 	gboolean composer;
+
+	gint last_error;
 };
 
 enum {
@@ -67,14 +69,14 @@ static void emf_parse_multipart_encrypted	(EMFormat *emf, CamelMimePart *part, G
 static void emf_parse_multipart_mixed		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void emf_parse_multipart_signed		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void emf_parse_multipart_related		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
-static void emf_parse_message_rfc822		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
+static void emf_parse_multipart_digest		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void emf_parse_message_deliverystatus	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void emf_parse_inlinepgp_signed		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void emf_parse_inlinepgp_encrypted	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void emf_parse_source			(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
+static void emf_parse_attachment		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 
 /* WRITERS */
-static void emf_write_message_rfc822		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable) {};
 static void emf_write_text			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable) {};
 static void emf_write_source			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable) {}
 
@@ -274,7 +276,6 @@ emf_parse_application_mbox (EMFormat *emf,
 	messages = 0;
 	state = camel_mime_parser_step (parser, NULL, NULL);
 
-	em_format_push_level (emf);
 	while (state == CAMEL_MIME_PARSER_STATE_FROM) {
 		CamelMimeMessage *message;
 
@@ -301,7 +302,6 @@ emf_parse_application_mbox (EMFormat *emf,
 
 		messages++;
 	}
-	em_format_pull_level (emf);
 
 	g_object_unref (parser);
 }
@@ -531,8 +531,6 @@ emf_parse_multipart_mixed (EMFormat *emf,
 		return;
 	}
 
-	em_format_push_level (emf);
-
 	len = part_id->len;
 	nparts = camel_multipart_get_number (mp);
 	for (i = 0; i < nparts; i++) {
@@ -544,8 +542,6 @@ emf_parse_multipart_mixed (EMFormat *emf,
 		em_format_parse_part (emf, subpart, part_id, info, cancellable);
 		g_string_truncate (part_id, len);
 	}
-
-	em_format_pull_level (emf);
 }
 
 static void
@@ -625,7 +621,6 @@ emf_parse_multipart_signed (EMFormat *emf,
 		} else {
 			gint i, nparts, len = part_id->len;
 			nparts = camel_multipart_get_number (CAMEL_MULTIPART (mps));
-			em_format_push_level (emf);
 			for (i = 0; i < nparts; i++) {
 				CamelMimePart *subpart;
 				EMFormatParserInfo signinfo = {
@@ -640,10 +635,63 @@ emf_parse_multipart_signed (EMFormat *emf,
 				em_format_parse_part (emf, subpart, part_id, &signinfo, cancellable);
 				g_string_truncate (part_id, len);
 			}
-			em_format_pull_level (emf);
+		}
+	}
+
+	g_object_unref (cipher);
+}
+
+
+/* RFC 2046 */
+static void
+emf_parse_multipart_digest (EMFormat *emf,
+                     	    CamelMimePart *part,
+                     	    GString *part_id,
+                     	    EMFormatParserInfo *info,
+                     	    GCancellable *cancellable)
+{
+	CamelMultipart *mp;
+	gint i, nparts, len;
+
+	if (g_cancellable_is_cancelled (cancellable))
+		return;
+
+	mp = (CamelMultipart *) camel_medium_get_content ((CamelMedium *) part);
+
+	if (!CAMEL_IS_MULTIPART (mp)) {
+		emf_parse_source (emf, part, part_id, info, cancellable);
+		return;
+	}
+
+	len = part_id->len;
+	nparts = camel_multipart_get_number (mp);
+	for (i = 0; i < nparts; i++) {
+		CamelMimePart *subpart;
+		CamelContentType *ct;
+		gchar *cts;
+		EMFormatHandler *handler;
+
+		subpart = camel_multipart_get_part (mp, i);
+
+		if (!subpart)
+			continue;
+
+		g_string_append_printf(part_id, ".digest.%d", i);
+
+		ct = camel_mime_part_get_content_type (subpart);
+		/* According to RFC this shouldn't happen, but who knows... */
+		if (ct && !camel_content_type_is (ct, "message", "rfc822")) {
+			cts = camel_content_type_simple (ct);
+			em_format_parse_part_as (emf, part, part_id, info, cts, cancellable);
+			g_free (cts);
+			g_string_truncate (part_id, len);
+			continue;
 		}
 
-		g_object_unref (cipher);
+		handler = em_format_find_handler (emf, "x-evolution/message/attachment");
+		handler->parse_func (emf, subpart, part_id, info, cancellable);
+
+		g_string_truncate (part_id, len);
 	}
 }
 
@@ -677,8 +725,6 @@ emf_parse_multipart_related (EMFormat *emf,
 		return;
 	}
 
-	em_format_push_level (emf);
-
 	/* The to-be-displayed part goes first */
 	partidlen = part_id->len;
 	g_string_append_printf(part_id, ".related.%d", displayid);
@@ -695,38 +741,9 @@ emf_parse_multipart_related (EMFormat *emf,
 			g_string_truncate (part_id, partidlen);
 		}
 	}
-
-	em_format_pull_level (emf);
 }
 
-static void
-emf_parse_message_rfc822 (EMFormat *emf,
-                    	  CamelMimePart *part,
-                    	  GString *part_id,
-                    	  EMFormatParserInfo *info,
-                    	  GCancellable *cancellable)
-{
-	CamelDataWrapper *dw = camel_medium_get_content ((CamelMedium *) part);
-	gint len;
-	EMFormatPURI *puri;
 
-	if (g_cancellable_is_cancelled (cancellable))
-		return;
-
-	if (!CAMEL_IS_MIME_MESSAGE (dw)) {
-		emf_parse_source (emf, part, part_id, info, cancellable);
-		return;
-	}
-
-	len = part_id->len;
-	g_string_append_printf(part_id, ".rfc822");
-
-	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
-	puri->write_func = emf_write_message_rfc822;
-	g_string_truncate (part_id, len);
-
-	em_format_add_puri (emf, puri);
-}
 
 static void
 emf_parse_message_deliverystatus (EMFormat *emf,
@@ -771,6 +788,7 @@ emf_parse_inlinepgp_signed (EMFormat *emf,
 	gint len;
 	GError *local_error = NULL;
 	EMFormatParserInfo signinfo;
+	GByteArray *ba;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
@@ -814,8 +832,8 @@ emf_parse_inlinepgp_signed (EMFormat *emf,
 	/* Pass through the filters that have been setup */
 	dw = camel_medium_get_content ((CamelMedium *) ipart);
 	camel_data_wrapper_decode_to_stream_sync (
-		dw, (CamelStream *) filtered_stream, NULL, NULL);
-	camel_stream_flush ((CamelStream *) filtered_stream, NULL, NULL);
+		dw, (CamelStream *) filtered_stream, cancellable, NULL);
+	camel_stream_flush ((CamelStream *) filtered_stream, cancellable, NULL);
 	g_object_unref (filtered_stream);
 
 	/* Create a new text/plain MIME part containing the signed
@@ -832,14 +850,10 @@ emf_parse_inlinepgp_signed (EMFormat *emf,
 	type = camel_content_type_format (content_type);
 	camel_content_type_unref (content_type);
 
-	dw = camel_data_wrapper_new ();
-	camel_data_wrapper_construct_from_stream_sync (dw, ostream, NULL, NULL);
-	camel_data_wrapper_set_mime_type (dw, type);
-	g_free (type);
-
+	ba = camel_stream_mem_get_byte_array ((CamelStreamMem *) ostream);
 	opart = camel_mime_part_new ();
-	camel_medium_set_content ((CamelMedium *) opart, dw);
-	camel_data_wrapper_set_mime_type_field ((CamelDataWrapper *) opart, dw->mime_type);
+	camel_mime_part_set_content (opart, (gchar *) ba->data, ba->len, type);
+	g_free (type);
 
 	/* Pass it off to the real formatter */
 	len = part_id->len;
@@ -932,10 +946,10 @@ emf_parse_inlinepgp_encrypted (EMFormat *emf,
 
 static void
 emf_parse_source (EMFormat *emf,
-				  CamelMimePart *part,
-				  GString *part_id,
-				  EMFormatParserInfo *info,
-				  GCancellable *cancellable)
+		  CamelMimePart *part,
+		  GString *part_id,
+		  EMFormatParserInfo *info,
+		  GCancellable *cancellable)
 {
 	EMFormatPURI *puri;
 	gint len;
@@ -949,6 +963,21 @@ emf_parse_source (EMFormat *emf,
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
 	puri->write_func = emf_write_source;
 	g_string_truncate (part_id, len);
+
+	em_format_add_puri (emf, puri);
+}
+
+static void
+emf_parse_attachment (EMFormat *emf,
+		      CamelMimePart *part,
+		      GString *part_id,
+		      EMFormatParserInfo *info,
+		      GCancellable *cancellable)
+{
+	EMFormatPURI *puri;
+
+	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
+	puri->is_attachment = TRUE;
 
 	em_format_add_puri (emf, puri);
 }
@@ -1075,11 +1104,8 @@ static EMFormatHandler type_handlers[] = {
 		{ (gchar *) "multipart/mixed", emf_parse_multipart_mixed, },
 		{ (gchar *) "multipart/signed", emf_parse_multipart_signed, },
 		{ (gchar *) "multipart/related", emf_parse_multipart_related, },
+		{ (gchar *) "multipart/digest", emf_parse_multipart_digest, },
 		{ (gchar *) "multipart/*", emf_parse_multipart_mixed, },
-		{ (gchar *) "message/rfc822", emf_parse_message_rfc822, 0, EM_FORMAT_HANDLER_INLINE },
-		{ (gchar *) "message/news", emf_parse_message_rfc822, 0, EM_FORMAT_HANDLER_INLINE },
-		{ (gchar *) "message/delivery-status", emf_parse_message_deliverystatus, },
-		{ (gchar *) "message/*", emf_parse_message_rfc822, 0, EM_FORMAT_HANDLER_INLINE },
 
 		/* Insert brokenly-named parts here */
 #ifdef ENABLE_SMIME
@@ -1090,6 +1116,7 @@ static EMFormatHandler type_handlers[] = {
 		{ (gchar *) "application/x-inlinepgp-signed", emf_parse_inlinepgp_signed, },
 		{ (gchar *) "application/x-inlinepgp-encrypted", emf_parse_inlinepgp_encrypted, },
 		{ (gchar *) "x-evolution/message/source", emf_parse_source, },
+		{ (gchar *) "x-evolution/message/attachment", emf_parse_attachment, },
 };
 
 /* note: also copied in em-mailer-prefs.c */
@@ -1300,6 +1327,8 @@ em_format_init (EMFormat *emf)
 	shell = e_shell_get_default ();
 	shell_settings = e_shell_get_shell_settings (shell);
 
+	emf->priv->last_error = 0;
+
 	emf->priv->session = e_shell_settings_get_pointer (shell_settings, "mail-session");
 	g_return_if_fail (emf->priv->session);
 
@@ -1497,51 +1526,42 @@ em_format_add_header (EMFormat *emf,
 }
 
 void
-em_format_push_level (EMFormat *emf)
-{
-	/*
-	GNode *node;
-
-	node = g_node_new (NULL);
-	if (emf->mail_part_tree == NULL) {
-		emf->mail_part_tree = node;
-	} else {
-		g_node_append (emf->priv->current_node, node);
-	}
-
-	emf->priv->current_node = node;
-
-	puri_level++;
-	printf("###### push_level to %d\n", puri_level);
-	*/
-}
-
-void
-em_format_pull_level (EMFormat *emf)
-{
-	/*
-	g_return_if_fail (emf->priv->current_node);
-
-	emf->priv->current_node = emf->priv->current_node->parent;
-
-	puri_level--;
-	printf("###### pull_level to %d\n", puri_level);
-	*/
-}
-
-void
 em_format_add_puri (EMFormat *emf,
-		    		EMFormatPURI *puri)
+		    EMFormatPURI *puri)
 {
+	g_return_if_fail (EM_IS_FORMAT (emf));
+	g_return_if_fail (puri != NULL);
+
 	emf->mail_part_list = g_list_append (emf->mail_part_list, puri);
 
 	g_hash_table_insert (emf->mail_part_table,
 			puri->uri, puri);
 
+	printf("  added PURI '%s', type %s, cid %s\n", puri->uri,
+			camel_content_type_simple (camel_mime_part_get_content_type (puri->part)), puri->cid);
+}
 
-	printf("  added PURI '%s', type %s\n", puri->uri,
-			camel_content_type_simple (
-					camel_mime_part_get_content_type (puri->part)));
+EMFormatPURI*
+em_format_find_puri (EMFormat *emf,
+		     const gchar *id)
+{
+	/* First handle CIDs... */
+	if (g_str_has_prefix (id, "CID:") || g_str_has_prefix (id, "cid:")) {
+		GHashTableIter iter;
+		gpointer key, value;
+
+		g_hash_table_iter_init (&iter, emf->mail_part_table);
+		while (g_hash_table_iter_next (&iter, &key, &value)) {
+			EMFormatPURI *puri = value;
+			if (g_strcmp0 (puri->cid, id) == 0)
+				return puri;
+		}
+
+		return NULL;
+	}
+
+
+	return g_hash_table_lookup (emf->mail_part_table, id);
 }
 
 void
@@ -1657,20 +1677,20 @@ em_format_parse_part_as (EMFormat *emf,
 						 GCancellable *cancellable)
 {
 	const EMFormatHandler *handler;
+	EMFormatParserInfo ninfo = {
+		0,
+		info ? info->validity_type : 0,
+		info ? info->validity : 0
+	};
 
 	handler = em_format_find_handler (emf, mime_type);
 	if (handler) {
-		EMFormatParserInfo ninfo = {
-			handler,
-			info ? info->validity_type : 0,
-			info ? info->validity : 0
-		};
+		ninfo.handler = handler;
 		handler->parse_func (emf, part, part_id, &ninfo, cancellable);
 	} else {
-		EMFormatPURI *puri;
-
-		puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
-		em_format_add_puri (emf, puri);
+		handler = em_format_find_handler (emf, "x-evolution/message/attachment");
+		ninfo.handler = handler;
+		handler->parse_func (emf, part, part_id, &ninfo, cancellable);
 	}
 }
 
@@ -1718,6 +1738,14 @@ em_format_is_inline (EMFormat *emf,
 
 }
 
+gchar*
+em_format_get_error_id (EMFormat *emf)
+{
+	g_return_val_if_fail (EM_IS_FORMAT (emf), NULL);
+
+	emf->priv->last_error++;
+	return g_strdup_printf (".error.%d", emf->priv->last_error);
+}
 
 void
 em_format_format_error (EMFormat *emf,

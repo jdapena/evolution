@@ -62,11 +62,13 @@
 #include "widgets/misc/e-attachment.h"
 #include "widgets/misc/e-attachment-button.h"
 #include "widgets/misc/e-attachment-view.h"
+#include "shell/e-shell.h"
+#include "shell/e-shell-window.h"
 
 #define d(x)
 
 struct _EMFormatHTMLDisplayPrivate {
-	GHashTable *attachment_views;  /* weak reference; message_part_id->EAttachmentView */
+	EAttachmentView *attachment_view;
 };
 
 /* TODO: move the dialogue elsehwere */
@@ -95,15 +97,15 @@ static const gchar *smime_sign_colour[5] = {
 	"", " bgcolor=\"#88bb88\"", " bgcolor=\"#bb8888\"", " bgcolor=\"#e8d122\"",""
 };
 
-static void efhd_attachment_frame (EMFormat *emf, CamelStream *stream, EMFormatPURI *puri, GCancellable *cancellable);
-static void efhd_message_add_bar (EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
-static GtkWidget* efhd_attachment_button (EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
-static GtkWidget* efhd_attachment_optional (EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
+static void efhd_message_prefix 	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
+static void efhd_message_add_bar	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
+static void efhd_parse_attachment	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
+
+static GtkWidget* efhd_attachment_bar		(EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
+static GtkWidget* efhd_attachment_button	(EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
+static GtkWidget* efhd_attachment_optional	(EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
+
 static void efhd_free_attach_puri_data (EMFormatPURI *puri);
-
-
-static void efhd_message_prefix (EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
-
 static void efhd_builtin_init (EMFormatHTMLDisplayClass *efhc);
 
 static gpointer parent_class;
@@ -334,38 +336,6 @@ efhd_xpkcs7mime_button (EMFormat *emf,
 	return widget;
 }
 
-static gboolean
-remove_attachment_view_cb (gpointer message_part_id,
-                           gpointer attachment_view,
-                           gpointer gone_attachment_view)
-{
-	return attachment_view == gone_attachment_view;
-}
-
-static void
-efhd_attachment_view_gone_cb (gpointer efh,
-                              GObject *gone_attachment_view)
-{
-	EMFormatHTMLDisplay *efhd = EM_FORMAT_HTML_DISPLAY (efh);
-
-	g_return_if_fail (efhd != NULL);
-
-	g_hash_table_foreach_remove (
-		efhd->priv->attachment_views,
-		remove_attachment_view_cb,
-		gone_attachment_view);
-}
-
-static void
-weak_unref_attachment_view_cb (gpointer message_part_id,
-                               gpointer attachment_view,
-                               gpointer efh)
-{
-	g_object_weak_unref (
-		G_OBJECT (attachment_view),
-		efhd_attachment_view_gone_cb, efh);
-}
-
 static void
 efhd_parse (EMFormat *emf,
 	    CamelMimeMessage *msg,
@@ -376,9 +346,6 @@ efhd_parse (EMFormat *emf,
 
 	efhd = EM_FORMAT_HTML_DISPLAY (emf);
 	g_return_if_fail (efhd != NULL);
-
-	g_hash_table_foreach (efhd->priv->attachment_views, weak_unref_attachment_view_cb, efhd);
-	g_hash_table_remove_all (efhd->priv->attachment_views);
 
 	/* FIXME WEBKIT Duh?
 	if (emf != src)
@@ -391,22 +358,25 @@ efhd_parse (EMFormat *emf,
 }
 
 static void
-efhd_format_attachment (EMFormat *emf,
-                        EMFormatPURI *puri,
-                        GCancellable *cancellable)
+efhd_parse_attachment (EMFormat *emf,
+                       CamelMimePart *part,
+                       GString *part_id,
+                       EMFormatParserInfo *info,
+                       GCancellable *cancellable)
 {
 	gchar *classid, *text, *html;
-	EMFormatAttachmentPURI *info;
+	EMFormatAttachmentPURI *puri;
 	const EMFormatHandler *handler;
 	CamelContentType *ct;
 	gchar *mime_type;
+	const gchar *cid;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
 
-	classid = g_strdup_printf ("attachment.%s", puri->uri);
+	classid = g_strdup_printf ("attachment.%s", part_id->str);
 
-	ct = camel_mime_part_get_content_type (puri->part);
+	ct = camel_mime_part_get_content_type (part);
 	if (ct) {
 		mime_type = camel_content_type_simple (ct);
 
@@ -414,36 +384,38 @@ efhd_format_attachment (EMFormat *emf,
 	}
 
 	/* FIXME: should we look up mime_type from object again? */
-	text = em_format_describe_part (puri->part, mime_type);
+	text = em_format_describe_part (part, mime_type);
 	html = camel_text_to_html (
 		text, EM_FORMAT_HTML (emf)->text_html_flags &
 		CAMEL_MIME_FILTER_TOHTML_CONVERT_URLS, 0);
 	g_free (text);
 	g_free (mime_type);
 
-	info = (EMFormatAttachmentPURI*) em_format_puri_new (
-			emf, sizeof (EMFormatAttachmentPURI), puri->part, classid);
-	info->puri.free = efhd_free_attach_puri_data;
-	/* FIXME WEBKIT HEEEEEEELP, this func is killing me
-	info->widget_func = efhd_attachment_frame;
-	*/
-	info->shown = em_format_is_inline (
-		emf, info->puri.uri, info->puri.part, handler);
-	info->snoop_mime_type = em_format_snoop_type (puri->part);
-	info->attachment = e_attachment_new ();
-	info->attachment_view_part_id = g_strdup (puri->uri);
-	info->description = html;
+	puri = (EMFormatAttachmentPURI*) em_format_puri_new (
+			emf, sizeof (EMFormatAttachmentPURI), part, classid);
+	puri->puri.free = efhd_free_attach_puri_data;
+	puri->puri.widget_func = efhd_attachment_button;
+	puri->shown = em_format_is_inline (
+		emf, part_id->str,part, info->handler);
+	puri->snoop_mime_type = em_format_snoop_type (part);
+	puri->attachment = e_attachment_new ();
+	puri->attachment_view_part_id = g_strdup (classid);
+	puri->description = html;
+
+	cid = camel_mime_part_get_content_id (part);
+	if (cid)
+		puri->puri.cid = g_strdup_printf ("cid:%s", cid);
 
 	if (handler)
-		info->puri.write_func = handler->write_func;
+		puri->puri.write_func = handler->write_func;
 
-	em_format_add_puri (emf, (EMFormatPURI *) info);
+	em_format_add_puri (emf, (EMFormatPURI *) puri);
 
-	e_attachment_set_mime_part (info->attachment, info->puri.part);
+	e_attachment_set_mime_part (puri->attachment, part);
 
-	if (puri->validity) {
-		info->sign = puri->validity->sign.status;
-		info->encrypt = puri->validity->encrypt.status;
+	if (info->validity) {
+		puri->sign = info->validity->sign.status;
+		puri->encrypt = info->validity->encrypt.status;
 	}
 
 	g_free (classid);
@@ -506,7 +478,7 @@ efhd_format_secure (EMFormat *emf,
 				emf, sizeof (EMFormatSMIMEPURI), puri->part, puri->uri);
 		pobj->puri.free = efhd_xpkcs7mime_free;
 		pobj->valid = camel_cipher_validity_clone (puri->validity);
-		pobj->widget_func = efhd_xpkcs7mime_button;
+		pobj->puri.widget_func = efhd_xpkcs7mime_button;
 
 		em_format_add_puri (emf, (EMFormatPURI*) pobj);
 
@@ -702,12 +674,9 @@ efhd_finalize (GObject *object)
 	efhd = EM_FORMAT_HTML_DISPLAY (object);
 	g_return_if_fail (efhd != NULL);
 
-	if (efhd->priv->attachment_views) {
-		g_hash_table_foreach (
-			efhd->priv->attachment_views,
-			weak_unref_attachment_view_cb, efhd);
-		g_hash_table_destroy (efhd->priv->attachment_views);
-		efhd->priv->attachment_views = NULL;
+	if (efhd->priv->attachment_view) {
+		gtk_widget_destroy (GTK_WIDGET (efhd->priv->attachment_view));
+		efhd->priv->attachment_view = NULL;
 	}
 
 	/* Chain up to parent's finalize() method. */
@@ -729,7 +698,9 @@ efhd_class_init (EMFormatHTMLDisplayClass *class)
 
 	format_class = EM_FORMAT_CLASS (class);
 	format_class->parse = efhd_parse;
+/* FIXME WEBKIT format attachment?
 	format_class->format_attachment = efhd_format_attachment;
+*/
 	format_class->format_optional = efhd_format_optional;
 	format_class->format_secure = efhd_format_secure;
 
@@ -744,7 +715,8 @@ efhd_init (EMFormatHTMLDisplay *efhd)
 {
 	efhd->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		efhd, EM_TYPE_FORMAT_HTML_DISPLAY, EMFormatHTMLDisplayPrivate);
-	efhd->priv->attachment_views = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+	efhd->priv->attachment_view = E_ATTACHMENT_VIEW (e_mail_attachment_bar_new ());
 
 	/* we want to convert url's etc */
 	EM_FORMAT_HTML (efhd)->text_html_flags |=
@@ -808,7 +780,8 @@ em_format_html_display_new (void)
 
 static EMFormatHandler type_builtin_table[] = {
 	{ (gchar *) "x-evolution/message/prefix", efhd_message_prefix, },
-	{ (gchar *) "x-evolution/message/post-header", (EMFormatParseFunc) efhd_message_add_bar, }
+	{ (gchar *) "x-evolution/message/post-header", (EMFormatParseFunc) efhd_message_add_bar, },
+	{ (gchar *) "x-evolution/message/attachment", efhd_parse_attachment, },
 };
 
 static void
@@ -820,21 +793,6 @@ efhd_builtin_init (EMFormatHTMLDisplayClass *efhc)
 
 	for (i = 0; i < G_N_ELEMENTS (type_builtin_table); i++)
 		em_format_class_add_handler (emfc, &type_builtin_table[i]);
-}
-
-static void
-efhd_write_image (EMFormat *emf,
-                  CamelStream *stream,
-                  EMFormatPURI *puri,
-                  GCancellable *cancellable)
-{
-	CamelDataWrapper *dw = camel_medium_get_content ((CamelMedium *) puri->part);
-
-	/* TODO: identical to efh_write_image */
-	d(printf("writing image '%s'\n", puri->cid));
-	camel_data_wrapper_decode_to_stream_sync (
-		dw, stream, cancellable, NULL);
-	camel_stream_close (stream, cancellable, NULL);
 }
 
 static void
@@ -921,14 +879,17 @@ efhd_attachment_button (EMFormat *emf,
 						EMFormatPURI *puri,
 						GCancellable *cancellable)
 {
+	EShell *shell;
+	GtkWindow *window;
 	EMFormatAttachmentPURI *info = (EMFormatAttachmentPURI *) puri;
 	EMFormatHTML *efh = (EMFormatHTML *) emf;
 	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) efh;
-	EAttachmentView *view;
 	EAttachmentStore *store;
 	EAttachment *attachment;
-	//EWebView *web_view;
+	GFileInfo *finfo;
+	const gchar *name;
 	GtkWidget *widget;
+	GtkWidget *box;
 	gpointer parent;
 	guint32 size = 0;
 
@@ -968,19 +929,15 @@ efhd_attachment_button (EMFormat *emf,
 	e_attachment_set_encrypted (attachment, info->encrypt);
 	e_attachment_set_can_show (attachment, info->handle != NULL);
 
-	/* FIXME WEBKIT: We need some root-element
-	web_view = em_format_html_get_web_view (efh);
-	g_return_val_if_fail (web_view != NULL, TRUE);
-	parent = gtk_widget_get_toplevel (GTK_WIDGET (web_view));
-	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
-	*/
-	parent = NULL;
+	/* FIXME: Try to find a better way? */
+	shell = e_shell_get_default ();
+	window = e_shell_get_active_window (shell);
+	if (E_IS_SHELL_WINDOW (window))
+		parent = GTK_WIDGET (window);
+	else
+		parent = NULL;
 
-	view = em_format_html_display_get_attachment_view (efhd, info->attachment_view_part_id);
-	g_return_val_if_fail (view != NULL, TRUE);
-	gtk_widget_show (GTK_WIDGET (view));
-
-	store = e_attachment_view_get_store (view);
+	store = e_attachment_view_get_store (efhd->priv->attachment_view);
 	e_attachment_store_add_attachment (store, info->attachment);
 
 	e_attachment_load_async (
@@ -994,11 +951,32 @@ efhd_attachment_button (EMFormat *emf,
 		e_attachment_set_file_info (info->attachment, fileinfo);
 	}
 
-	widget = e_attachment_button_new (view);
+	box = gtk_hbox_new (FALSE, 5);
+	gtk_widget_show (box);
+
+	widget = e_attachment_button_new (efhd->priv->attachment_view);
 	e_attachment_button_set_attachment (
 		E_ATTACHMENT_BUTTON (widget), attachment);
 	gtk_widget_set_can_focus (widget, TRUE);
 	gtk_widget_show (widget);
+	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 5);
+
+	finfo = e_attachment_get_file_info (info->attachment);
+	name = NULL;
+	if (finfo)
+		name = g_file_info_get_display_name (finfo);
+
+	if (name == NULL)
+		name = _("attachment.dat");
+
+	widget = gtk_label_new (name);
+	gtk_widget_show (widget);
+	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 5);
+
+	/* Makes the EAttachmentButton and label with name to be aligned to left */
+	widget = gtk_label_new ("");
+	gtk_widget_show (widget);
+	gtk_box_pack_start (GTK_BOX (box), widget, TRUE, TRUE, 5);
 
 	/* FIXME Not sure why the expanded callback can't just use
 	 *       info->puri.format, but there seems to be lifecycle
@@ -1006,27 +984,17 @@ efhd_attachment_button (EMFormat *emf,
 	 *       a reference count? */
 	g_object_set_data (G_OBJECT (widget), "efh", efh);
 
-	return widget;
+	return box;
 }
 
-static void
-efhd_attachment_frame (EMFormat *emf,
-                       CamelStream *stream,
-                       EMFormatPURI *puri,
-                       GCancellable *cancellable)
+static GtkWidget*
+efhd_attachment_bar (EMFormat *emf,
+		     EMFormatPURI *puri,
+		     GCancellable *cancellable)
 {
-	/* FIXME WEBKIT Heeeelp, I can't force Evo to call this function
-	 * so I don't know what it actually does :(
+	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) emf;
 
-	struct _attach_puri *info = (struct _attach_puri *) puri;
-
-	if (info->shown)
-		info->handle->handler (
-			emf, stream, info->puri.part,
-			info->handle, cancellable, FALSE);
-
-	camel_stream_close (stream, cancellable, NULL);
-	*/
+	return GTK_WIDGET (efhd->priv->attachment_view);
 }
 
 static void
@@ -1055,46 +1023,11 @@ efhd_bar_resize (EMFormatHTML *efh,
 	widget = GTK_WIDGET (web_view);
 	gtk_widget_get_allocation (widget, &allocation);
 	width = allocation.width - 12;
-	*/
 
 	if (width > 0) {
 		g_hash_table_foreach (priv->attachment_views, set_size_request_cb, GINT_TO_POINTER (width));
 	}
-}
-
-static GtkWidget*
-efhd_add_bar (EMFormat *emf,
-			  EMFormatPURI *puri,
-              GCancellable *cancellable)
-{
-    EMFormatAttachmentPURI *info = (EMFormatAttachmentPURI *) puri;
-    EMFormatHTML *efh = (EMFormatHTML *) emf;
-	EMFormatHTMLDisplayPrivate *priv;
-	GtkWidget *widget;
-
-	if (g_cancellable_is_cancelled (cancellable))
-		return NULL;
-
-	/* XXX See note in efhd_message_add_bar(). */
-	if (!EM_IS_FORMAT_HTML_DISPLAY (efh))
-		return FALSE;
-
-	g_return_val_if_fail (info != NULL, FALSE);
-	g_return_val_if_fail (g_str_has_prefix (info->puri.uri, "attachment-bar:"), FALSE);
-
-	priv = EM_FORMAT_HTML_DISPLAY (efh)->priv;
-
-	widget = e_mail_attachment_bar_new ();
-
-	g_hash_table_insert (priv->attachment_views, g_strdup (strchr (info->puri.uri, ':') + 1), widget);
-	g_object_weak_ref (G_OBJECT (widget), efhd_attachment_view_gone_cb, efh);
-	gtk_widget_hide (widget);
-
-	g_signal_connect_swapped (
-		widget, "size-allocate",
-		G_CALLBACK (efhd_bar_resize), efh);
-
-	return widget;
+	*/
 }
 
 static void
@@ -1105,7 +1038,6 @@ efhd_message_add_bar (EMFormat *emf,
                       GCancellable *cancellable)
 {
 	gchar *classid;
-	gchar *content;
 	EMFormatAttachmentPURI *puri;
 
 	if (g_cancellable_is_cancelled (cancellable))
@@ -1114,16 +1046,10 @@ efhd_message_add_bar (EMFormat *emf,
 	classid = g_strdup_printf (
 		"attachment-bar:%s", part_id->str);
 
-	/* XXX Apparently this installs the callback for -all-
-	 *     EMFormatHTML subclasses, not just this subclass.
-	 *     Bad idea.  So we have to filter out other types
-	 *     in the callback. */
-	/* FIXME WEBKIT: oh, rly? ^^^ */
 	puri = (EMFormatAttachmentPURI *) em_format_puri_new (
 			emf, sizeof (EMFormatAttachmentPURI), part, classid);
-	puri->puri.widget_func = efhd_add_bar;
+	puri->puri.widget_func = efhd_attachment_bar;
 	em_format_add_puri (emf, (EMFormatPURI*) puri);
-
 
 	g_free (classid);
 }
@@ -1167,10 +1093,8 @@ efhd_attachment_optional (EMFormat *efh,
 	GtkWidget *hbox, *vbox, *button, *mainbox, *scroll, *label, *img;
 	AtkObject *a11y;
 	GtkWidget *view;
-	GtkAllocation allocation;
 	GtkTextBuffer *buffer;
 	GByteArray *byte_array;
-	EWebView *web_view;
 	EMFormatAttachmentPURI *info = (EMFormatAttachmentPURI *) puri;
 
 	if (g_cancellable_is_cancelled (cancellable))
@@ -1280,17 +1204,9 @@ efhd_free_attach_puri_data (EMFormatPURI *puri)
 
 /* returned object owned by html_display, thus do not unref it */
 EAttachmentView *
-em_format_html_display_get_attachment_view (EMFormatHTMLDisplay *html_display,
-                                            const gchar *message_part_id)
+em_format_html_display_get_attachment_view (EMFormatHTMLDisplay *efhd)
 {
-	gpointer aview;
+	g_return_val_if_fail (EM_IS_FORMAT_HTML_DISPLAY (efhd), NULL);
 
-	g_return_val_if_fail (EM_IS_FORMAT_HTML_DISPLAY (html_display), NULL);
-	g_return_val_if_fail (message_part_id != NULL, NULL);
-
-	/* it should be added in efhd_add_bar() with this message_part_id */
-	aview = g_hash_table_lookup (html_display->priv->attachment_views, message_part_id);
-	g_return_val_if_fail (aview != NULL, NULL);
-
-	return E_ATTACHMENT_VIEW (aview);
+	return E_ATTACHMENT_VIEW (efhd->priv->attachment_view);
 }
