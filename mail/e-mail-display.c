@@ -36,6 +36,7 @@
 #include "mail/e-mail-request.h"
 #include "mail/em-format-html-display.h"
 #include "mail/e-mail-attachment-bar.h"
+#include "widgets/misc/e-attachment-button.h"
 
 #include <libsoup/soup.h>
 #include <libsoup/soup-requester.h>
@@ -368,8 +369,6 @@ mail_display_resource_requested (WebKitWebView *web_view,
                 g_free (data);
                 g_free (path);
         }
-
-       	//g_signal_stop_emission_by_name (web_view, "resource-request-starting");
 }
 
 static void
@@ -393,7 +392,7 @@ mail_display_headers_collapsed_state_changed (EWebView *web_view,
 
 static void
 mail_display_install_js_callbacks (WebKitWebView *web_view,
-				   WebKitWebFrame *frame,
+			           WebKitWebFrame *frame,
 				   gpointer context,
 				   gpointer window_object,
 				   gpointer user_data)
@@ -447,6 +446,34 @@ mail_display_setup_webview (EMailDisplay *display)
 }
 
 static void
+mail_display_insert_web_view (EMailDisplay *display,
+			      EWebView *web_view,
+			      gboolean expandable)
+{
+#if 0
+	GtkWidget *scrolled_window;
+
+	display->widgets = g_list_append (display->widgets, GTK_WIDGET (web_view));
+	scrolled_window = gtk_scrolled_window_new (NULL, NULL);
+	g_object_set (G_OBJECT (scrolled_window),
+		"hscrollbar-policy", GTK_POLICY_NEVER,
+		"vscrollbar-policy", GTK_POLICY_NEVER,
+		"shadow-type", GTK_SHADOW_NONE, NULL);
+		//"min-content-height", 300, NULL);
+	gtk_container_add (GTK_CONTAINER (scrolled_window), GTK_WIDGET (web_view));
+	display->widgets = g_list_append (display->widgets, scrolled_window);
+
+	gtk_box_pack_start (GTK_BOX (display->priv->vbox), scrolled_window, expandable, TRUE, 0);
+	gtk_widget_show_all (scrolled_window);
+#endif
+
+	gtk_box_pack_start (GTK_BOX (display->priv->vbox), GTK_WIDGET (web_view), expandable, TRUE, 0);
+	display->widgets = g_list_append (display->widgets, GTK_WIDGET (web_view));
+	gtk_widget_show_all (GTK_WIDGET (web_view));
+
+}
+
+static void
 mail_display_class_init (EMailDisplayClass *class)
 {
 	GObjectClass *object_class;
@@ -490,7 +517,6 @@ mail_display_class_init (EMailDisplayClass *class)
 static void
 mail_display_init (EMailDisplay *display)
 {
-	GtkScrolledWindow *scrolled_window;
 	SoupSession *session;
 	SoupSessionFeature *feature;
 	GValue margin = {0};
@@ -498,12 +524,8 @@ mail_display_init (EMailDisplay *display)
 	display->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		display, E_TYPE_MAIL_DISPLAY, EMailDisplayPrivate);
 
-	scrolled_window = GTK_SCROLLED_WINDOW (display);
-	gtk_scrolled_window_set_policy (scrolled_window, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_shadow_type (scrolled_window, GTK_SHADOW_NONE);
-
-	display->priv->vbox = gtk_vbox_new (FALSE, 0);
-	gtk_scrolled_window_add_with_viewport (scrolled_window, display->priv->vbox);
+	display->priv->vbox = gtk_vbox_new (FALSE, 10);
+	gtk_container_add (GTK_CONTAINER (display), display->priv->vbox);
 	g_value_init (&margin, G_TYPE_INT);
 	g_value_set_int (&margin, 10);
 	g_object_set_property (G_OBJECT (display->priv->vbox), "margin", &margin);
@@ -600,6 +622,8 @@ e_mail_display_load (EMailDisplay *display,
 		     const gchar *msg_uri)
 {
 	EWebView *web_view;
+	EAttachmentStore *attachment_store;
+	GtkWidget *attachment_bar;
 	EMFormatPURI *puri;
 	EMFormat *emf = (EMFormat *) display->priv->formatter;
 	gchar *uri;
@@ -608,34 +632,44 @@ e_mail_display_load (EMailDisplay *display,
 
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
+	/* Don't use gtk_widget_show_all() to display all widgets at once,
+	   it makes all parts of EMailAttachmentBar visible and that's not
+	   what we want.
+	   FIXME: Maybe using gtk_widget_set_no_show_all() in EAttachmentView
+	          could help...
+	*/
+
 	/* First remove all widgets left after previous message */
 	e_mail_display_clear (display);
 
 	box = GTK_BOX (display->priv->vbox);
+	gtk_widget_show (display->priv->vbox);
 
 	/* Headers webview */
 	web_view = mail_display_setup_webview (display);
-	display->widgets = g_list_append (display->widgets, GTK_WIDGET (web_view));
-	gtk_box_pack_start (box, GTK_WIDGET (web_view),
-			TRUE, TRUE, 0);
+	mail_display_insert_web_view (display, web_view, FALSE);
 	uri = em_format_build_mail_uri (emf->folder, emf->message_uid, "headers");
 	e_web_view_load_uri (web_view, uri);
 	g_free (uri);
 
 	/* Attachment bar */
+	attachment_store = NULL;
 	puri = g_hash_table_lookup (emf->mail_part_table, "attachment-bar:");
 	if (puri && puri->widget_func) {
-		GtkWidget *widget = puri->widget_func (emf, puri, NULL);
-		display->widgets = g_list_append (display->widgets, widget);
-		gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
+		attachment_bar = puri->widget_func (emf, puri, NULL);
+		display->widgets = g_list_append (display->widgets, attachment_bar);
+		gtk_box_pack_start (box, attachment_bar, TRUE, TRUE, 0);
+		attachment_store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (attachment_bar));
+		gtk_widget_show (attachment_bar);
 	}
 
 	for (iter = emf->mail_part_list; iter; iter = iter->next) {
+		GtkWidget *widget = NULL;
+
 		puri = iter->data;
 		uri = em_format_build_mail_uri (emf->folder, emf->message_uid, puri->uri);
 
 		if (puri->widget_func && strcmp (puri->uri, "attachment-bar:") != 0) {
-			GtkWidget *widget;
 
 			widget = puri->widget_func (emf, puri, NULL);
 			if (!widget) {
@@ -643,21 +677,29 @@ e_mail_display_load (EMailDisplay *display,
 				continue;
 			}
 			display->widgets = g_list_append (display->widgets, widget);
-			gtk_box_pack_start (box, widget,
-					TRUE, TRUE, 0);
+			gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
+			gtk_widget_show (widget);
 
-		} else if (puri->write_func) {
+		}
+
+		if ((!puri->is_attachment && puri->write_func) || (puri->is_attachment && puri->write_func && puri->widget_func)) {
 			web_view = mail_display_setup_webview (display);
-			display->widgets = g_list_append (display->widgets, GTK_WIDGET (web_view));
-			gtk_box_pack_start (box, GTK_WIDGET (web_view),
-					TRUE, TRUE, 0);
+			mail_display_insert_web_view (display, web_view, TRUE);
 			e_web_view_load_uri (web_view, uri);
+
+			if (widget) {
+				g_object_bind_property (widget, "expanded",
+					web_view, "visible", G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
+			}
+
 		}
 
 		g_free (uri);
 	}
 
-	gtk_widget_show_all (display->priv->vbox);
+	/* Don't display EAttachmentBar if it's empty. */
+	if (attachment_store && e_attachment_store_get_num_attachments (attachment_store) == 0)
+		gtk_widget_hide (attachment_bar);
 }
 
 void
