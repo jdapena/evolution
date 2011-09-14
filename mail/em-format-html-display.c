@@ -401,6 +401,7 @@ efhd_parse_attachment (EMFormat *emf,
 	puri->attachment = e_attachment_new ();
 	puri->attachment_view_part_id = g_strdup (classid);
 	puri->description = html;
+	puri->handle = info->handler;
 
 	cid = camel_mime_part_get_content_id (part);
 	if (cid)
@@ -889,7 +890,6 @@ efhd_attachment_button (EMFormat *emf,
 	GFileInfo *finfo;
 	const gchar *name;
 	GtkWidget *widget;
-	GtkWidget *box;
 	gpointer parent;
 	guint32 size = 0;
 
@@ -951,32 +951,11 @@ efhd_attachment_button (EMFormat *emf,
 		e_attachment_set_file_info (info->attachment, fileinfo);
 	}
 
-	box = gtk_hbox_new (FALSE, 5);
-	gtk_widget_show (box);
-
 	widget = e_attachment_button_new (efhd->priv->attachment_view);
 	e_attachment_button_set_attachment (
 		E_ATTACHMENT_BUTTON (widget), attachment);
 	gtk_widget_set_can_focus (widget, TRUE);
 	gtk_widget_show (widget);
-	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 5);
-
-	finfo = e_attachment_get_file_info (info->attachment);
-	name = NULL;
-	if (finfo)
-		name = g_file_info_get_display_name (finfo);
-
-	if (name == NULL)
-		name = _("attachment.dat");
-
-	widget = gtk_label_new (name);
-	gtk_widget_show (widget);
-	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 5);
-
-	/* Makes the EAttachmentButton and label with name to be aligned to left */
-	widget = gtk_label_new ("");
-	gtk_widget_show (widget);
-	gtk_box_pack_start (GTK_BOX (box), widget, TRUE, TRUE, 5);
 
 	/* FIXME Not sure why the expanded callback can't just use
 	 *       info->puri.format, but there seems to be lifecycle
@@ -984,7 +963,7 @@ efhd_attachment_button (EMFormat *emf,
 	 *       a reference count? */
 	g_object_set_data (G_OBJECT (widget), "efh", efh);
 
-	return box;
+	return widget;
 }
 
 static GtkWidget*
