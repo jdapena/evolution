@@ -217,10 +217,10 @@ void			em_format_clear_headers		(EMFormat *emf);
 void			em_format_add_header 		(EMFormat *emf,
 											 const gchar *name,
 											 guint32 flags);
-void 			em_format_push_level		(EMFormat *emf);
-void 			em_format_pull_level		(EMFormat *emf);
 void			em_format_add_puri			(EMFormat *emf,
 											 EMFormatPURI *puri);
+EMFormatPURI*	em_format_find_puri			(EMFormat *emf,
+											 const gchar *id);
 
 void			em_format_class_add_handler	(EMFormatClass *emfc,
 											 EMFormatHandler *handler);
@@ -252,6 +252,8 @@ gboolean		em_format_is_inline			(EMFormat *emf,
 											 const gchar *part_id,
 											 CamelMimePart *part,
 											 const EMFormatHandler *handler);
+
+gchar*			em_format_get_error_id		(EMFormat *emf);
 
 void			em_format_format_error		(EMFormat *emf,
 											 const gchar *format,
