@@ -128,6 +128,7 @@ struct _EMFormatPURI {
 
 	gchar *uri;
 	gchar *cid;
+	gchar *mime_type;
 
 	/* EM_FORMAT_VALIDITY_* flags */
 	guint32 validity_type;

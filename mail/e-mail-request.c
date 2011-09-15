@@ -13,27 +13,15 @@ G_DEFINE_TYPE (EMailRequest, e_mail_request, SOUP_TYPE_REQUEST)
 
 struct _EMailRequestPrivate {
 	EMFormatHTML *efh;
-	CamelMimePart *part;
 
 	CamelStream *output_stream;
-
-	CamelContentType *content_type;
+	EMFormatPURI *puri;
 	gchar *mime_type;
+
 	gint content_length;
 
 	GHashTable *uri_query;
 };
-
-static void
-mail_request_set_content_type (EMailRequest *emr,
-			       CamelContentType *ct)
-{
-	if (emr->priv->content_type)
-		camel_content_type_unref (emr->priv->content_type);
-
-	emr->priv->content_type = ct;
-	camel_content_type_ref (emr->priv->content_type);
-}
 
 static void
 start_mail_formatting (GSimpleAsyncResult *res,
@@ -58,21 +46,11 @@ start_mail_formatting (GSimpleAsyncResult *res,
 	part_id = g_hash_table_lookup (request->priv->uri_query, "part_id");
 
 	if (part_id) {
-		gboolean all_headers = GPOINTER_TO_INT (g_hash_table_lookup (
-				request->priv->uri_query, "all-headers"));
-
-		if (strcmp (part_id, "headers") == 0) {
-			em_format_html_format_headers (efh, request->priv->output_stream,
-				CAMEL_MEDIUM (emf->message), all_headers, cancellable);
+		request->priv->puri = em_format_find_puri (emf, part_id);
+		if (request->priv->puri) {
+			em_format_puri_write (request->priv->puri, request->priv->output_stream, NULL);
 		} else {
-			EMFormatPURI *puri = em_format_find_puri (emf, part_id);
-			if (puri) {
-				em_format_puri_write (puri, request->priv->output_stream, NULL);
-				mail_request_set_content_type (request,
-					camel_mime_part_get_content_type (puri->part));
-			} else {
-				g_warning ("Failed to lookup requested part '%s' - this should not happen!", part_id);
-			}
+			g_warning ("Failed to lookup requested part '%s' - this should not happen!", part_id);
 		}
 	}
 
@@ -106,11 +84,7 @@ get_file_content (GSimpleAsyncResult *res,
 	uri = soup_request_get_uri (SOUP_REQUEST (request));
 
 	if (g_file_get_contents (uri->path, &contents, &length, NULL)) {
-		CamelContentType *ct;
 		request->priv->mime_type = g_content_type_guess (uri->path, NULL, 0, NULL);
-		ct = camel_content_type_decode (request->priv->mime_type);
-		mail_request_set_content_type (request, ct);
-		camel_content_type_unref (ct);
 
 		request->priv->content_length = length;
 
@@ -126,10 +100,9 @@ e_mail_request_init (EMailRequest *request)
 		request, E_TYPE_MAIL_REQUEST, EMailRequestPrivate);
 
 	request->priv->efh = NULL;
-	request->priv->part = NULL;
 	request->priv->output_stream = NULL;
 	request->priv->uri_query = NULL;
-	request->priv->content_type = NULL;
+	request->priv->puri = NULL;
 	request->priv->mime_type = NULL;
 	request->priv->content_length = 0;
 }
@@ -142,11 +115,6 @@ mail_request_finalize (GObject *object)
 	if (request->priv->output_stream) {
 		g_object_unref (request->priv->output_stream);
 		request->priv->output_stream = NULL;
-	}
-
-	if (request->priv->content_type) {
-		camel_content_type_unref (request->priv->content_type);
-		request->priv->content_type = NULL;
 	}
 
 	if (request->priv->mime_type) {
@@ -251,27 +219,19 @@ mail_request_get_content_type (SoupRequest *request)
 {
 	EMailRequest *emr = E_MAIL_REQUEST (request);
 
-	if (emr->priv->mime_type) {
-		d(printf("Content-Type: %s\n", emr->priv->mime_type));
+	if (emr->priv->mime_type)
 		return emr->priv->mime_type;
-	}
 
-	if (emr->priv->content_type == NULL) {
-		emr->priv->mime_type = g_strdup ("text/html; charset=utf-8");
+	if (!emr->priv->puri)
+		return "text/html";
 
-	/* For text/* content type, return text/html, because we
-	 * have converted it from whatever type it was to HTML */
-	} else if (camel_content_type_is (emr->priv->content_type, "text", "*")) {
-		emr->priv->mime_type = g_strdup ("text/html; charset=utf-8");
+	if (!emr->priv->puri->mime_type) {
+		CamelContentType *ct = camel_mime_part_get_content_type (emr->priv->puri->part);
+		return camel_content_type_format (ct);
+	} else
+		return emr->priv->puri->mime_type;
 
-	/* For any other format return it's native format, because then it is
-	 * most probably image or something similar */
-	} else {
-		emr->priv->mime_type = camel_content_type_simple (emr->priv->content_type);
-	}
-
-	d(printf("Content-Type: %s\n", emr->priv->mime_type));
-	return emr->priv->mime_type;
+	return "text/html";
 }
 
 static const char *data_schemes[] = { "mail", "evo-file", NULL };

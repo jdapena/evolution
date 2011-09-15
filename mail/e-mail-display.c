@@ -628,8 +628,6 @@ e_mail_display_load (EMailDisplay *display,
 		     const gchar *msg_uri)
 {
 	EWebView *web_view;
-	EAttachmentStore *attachment_store;
-	GtkWidget *attachment_bar;
 	EMFormatPURI *puri;
 	EMFormat *emf = (EMFormat *) display->priv->formatter;
 	gchar *uri;
@@ -651,38 +649,29 @@ e_mail_display_load (EMailDisplay *display,
 	box = GTK_BOX (display->priv->vbox);
 	gtk_widget_show (display->priv->vbox);
 
-	/* Headers webview */
-	web_view = mail_display_setup_webview (display);
-	mail_display_insert_web_view (display, web_view, FALSE);
-	uri = em_format_build_mail_uri (emf->folder, emf->message_uid, "headers");
-	e_web_view_load_uri (web_view, uri);
-	g_free (uri);
-
-	/* Attachment bar */
-	attachment_store = NULL;
-	puri = g_hash_table_lookup (emf->mail_part_table, "attachment-bar:");
-	if (puri && puri->widget_func) {
-		attachment_bar = g_object_ref (puri->widget_func (emf, puri, NULL));
-		gtk_box_pack_start (box, attachment_bar, TRUE, TRUE, 0);
-		attachment_store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (attachment_bar));
-		gtk_widget_show (attachment_bar);
-	}
-
 	for (iter = emf->mail_part_list; iter; iter = iter->next) {
 		GtkWidget *widget = NULL;
 
 		puri = iter->data;
 		uri = em_format_build_mail_uri (emf->folder, emf->message_uid, puri->uri);
 
-		if (puri->widget_func && strcmp (puri->uri, "attachment-bar:") != 0) {
+		if (puri->widget_func) {
 
 			widget = puri->widget_func (emf, puri, NULL);
-			if (!widget) {
+			if (!GTK_IS_WIDGET (widget)) {
 				g_message ("Part %s didn't provide a valid widget, skipping!", puri->uri);
 				continue;
 			}
+
 			gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
-			gtk_widget_show (widget);
+			if (E_IS_ATTACHMENT_VIEW (widget)) {
+				EAttachmentStore *store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (widget));
+				if (e_attachment_store_get_num_attachments (store) > 0)
+					gtk_widget_show (widget);
+				else
+					gtk_widget_hide (widget);
+			} else
+				gtk_widget_show (widget);
 
 		}
 
@@ -700,10 +689,6 @@ e_mail_display_load (EMailDisplay *display,
 
 		g_free (uri);
 	}
-
-	/* Don't display EAttachmentBar if it's empty. */
-	if (attachment_store && e_attachment_store_get_num_attachments (attachment_store) == 0)
-		gtk_widget_hide (attachment_bar);
 }
 
 void
@@ -752,6 +737,9 @@ static void
 remove_widget (GtkWidget *widget, gpointer user_data)
 {
 	EMailDisplay *display = user_data;
+
+	if (!GTK_IS_WIDGET (widget))
+		return;
 
 	gtk_container_remove  (GTK_CONTAINER (display->priv->vbox), widget);
 

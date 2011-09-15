@@ -142,6 +142,7 @@ static void efh_write_text_plain		(EMFormat *emf, EMFormatPURI *puri, CamelStrea
 static void efh_write_text_html			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
 static void efh_write_source			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
 static void efh_write_message_rfc822		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
+static void efh_write_headers			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
 /*****************************************************************************/
 static void
 efh_parse_image (EMFormat *emf,
@@ -171,6 +172,7 @@ efh_parse_image (EMFormat *emf,
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
 	puri->cid = cid;
 	puri->write_func = efh_write_image;
+	puri->mime_type = g_strdup (info->handler->mime_type);
 	puri->is_attachment = TRUE;
 
 	em_format_add_puri (emf, puri);
@@ -203,6 +205,7 @@ efh_parse_text_enriched (EMFormat *emf,
 	g_string_append (part_id, ".text_enriched");
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
 	puri->cid = cid;
+	puri->mime_type = g_strdup (info->handler->mime_type);
 	puri->write_func = efh_write_text_enriched;
 
 	em_format_add_puri (emf, puri);
@@ -314,6 +317,7 @@ efh_parse_text_plain (EMFormat *emf,
 			g_string_append (part_id, ".plain_text");
 			puri = em_format_puri_new (emf, sizeof (EMFormatPURI), newpart, part_id->str);
 			puri->write_func = efh_write_text_plain;
+			puri->mime_type = g_strdup ("text/html");
 			g_string_truncate (part_id, s_len);
 			em_format_add_puri (emf, puri);
 		} else {
@@ -482,6 +486,7 @@ addPart:
 	g_string_append (part_id, ".msg_external");
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
 	puri->write_func = efh_write_text_html;
+	puri->mime_type = g_strdup ("text/html");
 
 	em_format_add_puri (emf, puri);
 	g_string_truncate (part_id, len);
@@ -504,6 +509,7 @@ efh_parse_message_deliverystatus (EMFormat *emf,
 	g_string_append (part_id, ".deliverystatus");
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
 	puri->write_func = efh_write_source;
+	puri->mime_type = g_strdup ("text/html");
 
 	em_format_add_puri (emf, puri);
 	g_string_truncate (part_id, len);
@@ -516,16 +522,37 @@ efh_parse_message_rfc822 (EMFormat *emf,
 			  EMFormatParserInfo *info,
 			  GCancellable *cancellable)
 {
-	EMFormatPURI *puri;
+	CamelDataWrapper *dw;
+	CamelMimePart *opart;
+	CamelStream *stream;
+	CamelMimeParser *parser;
+	CamelContentType *ct;
+	gchar *cts;
 	gint len;
+	EMFormatParserInfo oinfo = *info;
 
 	len = part_id->len;
 	g_string_append (part_id, ".rfc822");
-	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
-	puri->write_func = efh_write_message_rfc822;
 
-	em_format_add_puri (emf, puri);
+	stream = camel_stream_mem_new ();
+	dw = camel_medium_get_content ((CamelMedium *) part);
+	camel_data_wrapper_write_to_stream_sync (dw, stream, cancellable, NULL);
+	g_seekable_seek (G_SEEKABLE (stream), 0, G_SEEK_SET, cancellable, NULL);
+
+	parser = camel_mime_parser_new ();
+	camel_mime_parser_init_with_stream (parser, stream, NULL);
+
+	opart = camel_mime_part_new ();
+	camel_mime_part_construct_from_parser_sync (opart, parser, cancellable, NULL);
+
+	em_format_parse_part_as (emf, opart, part_id, &oinfo,
+		"x-evolution/message", cancellable);
+
 	g_string_truncate (part_id, len);
+
+	g_object_unref (opart);
+	g_object_unref (parser);
+	g_object_unref (stream);
 }
 
 
@@ -726,13 +753,13 @@ efh_write_source (EMFormat *emf,
 }
 
 static void
-efh_write_message_rfc822 (EMFormat *emf,
-			  EMFormatPURI *puri,
-			  CamelStream *stream,
-			  GCancellable *cancellable)
+efh_write_headers (EMFormat *emf,
+		   EMFormatPURI *puri,
+		   CamelStream *stream,
+		   GCancellable *cancellable)
 {
-
-
+	/* FIXME: We could handle this more nicely */
+	em_format_html_format_headers ((EMFormatHTML *) emf, stream, (CamelMedium *)  puri->part, FALSE, cancellable);
 }
 
 /*****************************************************************************/
@@ -767,10 +794,10 @@ static EMFormatHandler type_builtin_table[] = {
 	{ (gchar *) "text/html", efh_parse_text_html, efh_write_text_html, },
 	{ (gchar *) "text/richtext", efh_parse_text_enriched, efh_write_text_enriched, },
 	{ (gchar *) "text/*", efh_parse_text_plain, efh_write_text_plain, },
-        { (gchar *) "nessage/rfc822", efh_parse_message_rfc822, efh_write_message_rfc822, EM_FORMAT_HANDLER_INLINE },
-        { (gchar *) "message/news", efh_parse_message_rfc822, efh_write_message_rfc822, EM_FORMAT_HANDLER_INLINE },
-        { (gchar *) "message/delivery-status", efh_parse_message_deliverystatus, efh_write_message_rfc822, },
-	{ (gchar *) "message/external-body", efh_parse_message_external, efh_write_message_rfc822, },
+        { (gchar *) "message/rfc822", efh_parse_message_rfc822, 0, EM_FORMAT_HANDLER_INLINE },
+        { (gchar *) "message/news", efh_parse_message_rfc822, 0, EM_FORMAT_HANDLER_INLINE },
+        { (gchar *) "message/delivery-status", efh_parse_message_deliverystatus, efh_write_text_plain, },
+	{ (gchar *) "message/external-body", efh_parse_message_external, efh_write_text_plain, },
         { (gchar *) "message/*", efh_parse_message_rfc822, 0, EM_FORMAT_HANDLER_INLINE },
 
 	/* This is where one adds those busted, non-registered types,
@@ -780,7 +807,8 @@ static EMFormatHandler type_builtin_table[] = {
 	{ (gchar *) "image/pjpeg", efh_parse_image, efh_write_image, },
 
 	/* special internal types */
-	{ (gchar *) "x-evolution/message/rfc822", 0, efh_write_text_plain }
+	{ (gchar *) "x-evolution/message/rfc822", 0, efh_write_text_plain, },
+	{ (gchar *) "x-evolution/message/headers", 0, efh_write_headers, },
 };
 
 static void
@@ -1025,6 +1053,7 @@ efh_format_error (EMFormat *emf,
 
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, em_format_get_error_id (emf));
 	puri->write_func = efh_write_text_html;
+	puri->mime_type = g_strdup ("text/html");
 
 	em_format_add_puri (emf, puri);
 

@@ -364,17 +364,19 @@ efhd_parse_attachment (EMFormat *emf,
                        EMFormatParserInfo *info,
                        GCancellable *cancellable)
 {
-	gchar *classid, *text, *html;
+	gchar *text, *html;
 	EMFormatAttachmentPURI *puri;
 	const EMFormatHandler *handler;
 	CamelContentType *ct;
 	gchar *mime_type;
+	gint len;
 	const gchar *cid;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
 
-	classid = g_strdup_printf ("attachment.%s", part_id->str);
+	len = part_id->len;
+	g_string_append (part_id, ".attachment");
 
 	ct = camel_mime_part_get_content_type (part);
 	if (ct) {
@@ -392,14 +394,13 @@ efhd_parse_attachment (EMFormat *emf,
 	g_free (mime_type);
 
 	puri = (EMFormatAttachmentPURI*) em_format_puri_new (
-			emf, sizeof (EMFormatAttachmentPURI), part, classid);
+			emf, sizeof (EMFormatAttachmentPURI), part, part_id->str);
 	puri->puri.free = efhd_free_attach_puri_data;
 	puri->puri.widget_func = efhd_attachment_button;
-	puri->shown = em_format_is_inline (
-		emf, part_id->str,part, info->handler);
+	puri->shown = em_format_is_inline (emf, part_id->str, part, info->handler);
 	puri->snoop_mime_type = em_format_snoop_type (part);
 	puri->attachment = e_attachment_new ();
-	puri->attachment_view_part_id = g_strdup (classid);
+	puri->attachment_view_part_id = g_strdup (part_id->str);
 	puri->description = html;
 	puri->handle = handler;
 
@@ -419,7 +420,7 @@ efhd_parse_attachment (EMFormat *emf,
 		puri->encrypt = info->validity->encrypt.status;
 	}
 
-	g_free (classid);
+	g_string_truncate (part_id, len);
 }
 
 static void
@@ -781,7 +782,7 @@ em_format_html_display_new (void)
 
 static EMFormatHandler type_builtin_table[] = {
 	{ (gchar *) "x-evolution/message/prefix", efhd_message_prefix, },
-	{ (gchar *) "x-evolution/message/post-header", (EMFormatParseFunc) efhd_message_add_bar, },
+	{ (gchar *) "x-evolution/message/attachment-bar", (EMFormatParseFunc) efhd_message_add_bar, },
 	{ (gchar *) "x-evolution/message/attachment", efhd_parse_attachment, },
 };
 
@@ -1016,19 +1017,19 @@ efhd_message_add_bar (EMFormat *emf,
 {
 	gchar *classid;
 	EMFormatAttachmentPURI *puri;
+	gint len;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
 
-	classid = g_strdup_printf (
-		"attachment-bar:%s", part_id->str);
-
+	len = part_id->len;
+	g_string_append (part_id, ".attachment-bar");
 	puri = (EMFormatAttachmentPURI *) em_format_puri_new (
-			emf, sizeof (EMFormatAttachmentPURI), part, classid);
+			emf, sizeof (EMFormatAttachmentPURI), part, part_id->str);
 	puri->puri.widget_func = efhd_attachment_bar;
 	em_format_add_puri (emf, (EMFormatPURI*) puri);
 
-	g_free (classid);
+	g_string_truncate (part_id, len);
 }
 
 static void
