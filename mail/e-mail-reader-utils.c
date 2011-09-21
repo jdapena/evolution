@@ -796,6 +796,7 @@ mail_reader_get_message_ready_cb (CamelFolder *folder,
 	EMailBackend *backend;
 	EAlertSink *alert_sink;
 	EMFormatHTML *formatter;
+	EMailDisplay *display;
 	CamelMimeMessage *message;
 	GError *error = NULL;
 
@@ -823,8 +824,8 @@ mail_reader_get_message_ready_cb (CamelFolder *folder,
 
 	backend = e_mail_reader_get_backend (context->reader);
 	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (backend));
-
-	formatter = e_mail_reader_get_formatter (context->reader);
+	display = e_mail_reader_get_mail_display (context->reader);
+	formatter = e_mail_display_get_formatter (display);
 
 	em_utils_reply_to_message (
 		shell, message,

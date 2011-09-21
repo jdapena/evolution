@@ -200,28 +200,24 @@ CamelMimePart *	em_format_html_file_part	(EMFormatHTML *efh,
 gchar *		em_format_html_format_cert_infos
 						(CamelCipherCertInfo *first_cinfo);
 
-CamelStream *	
-			em_format_html_get_cached_image	(EMFormatHTML *efh,
+CamelStream *
+		em_format_html_get_cached_image	(EMFormatHTML *efh,
 						 const gchar *image_uri);
 
-void		em_format_html_format_message (EMFormatHTML *efh,
-					      CamelStream *stream,
-					      GCancellable *cancellable);
+void		em_format_html_format_message	(EMFormatHTML *efh,
+						 CamelStream *stream,
+						 GCancellable *cancellable);
 
-void		em_format_html_format_message_part (EMFormatHTML *efh,
-						  const gchar *part_id,
-    					  CamelStream *stream,
-						  GCancellable *cancellable);
-void		em_format_html_format_headers (EMFormatHTML *efh,
-					      CamelStream *stream,
-					      CamelMedium *part,
-					      GCancellable *cancellable);
-
+void		em_format_html_format_message_part
+						(EMFormatHTML *efh,
+						 const gchar *part_id,
+    						 CamelStream *stream,
+						 GCancellable *cancellable);
 void		em_format_html_format_headers	(EMFormatHTML *efh,
-					      CamelStream *stream,
-					      CamelMedium *part,
-					      gboolean all_headers,
-					      GCancellable *cancellable);
+					      	 CamelStream *stream,
+					      	 CamelMedium *part,
+					      	 gboolean all_headers,
+					      	 GCancellable *cancellable);
 
 G_END_DECLS
 

@@ -552,8 +552,12 @@ action_image_save_cb (GtkAction *action,
 	EAttachment *attachment;
 	GFile *file;
 
+	/* FIXME WEBKIT At this moment there's no way how to get EMailDisplay from
+	   EMFormat(HTML)
 	web_view = em_format_html_get_web_view (EM_FORMAT_HTML (efhd));
 	g_return_if_fail (web_view != NULL);
+	*/
+	return;
 
 	image_src = e_web_view_get_cursor_image_src (web_view);
 	if (!image_src)
@@ -715,6 +719,11 @@ efhd_class_init (EMFormatHTMLDisplayClass *class)
 static void
 efhd_init (EMFormatHTMLDisplay *efhd)
 {
+	EWebView *web_view;
+	GtkActionGroup *image_actions;
+	GtkUIManager *ui_manager;
+	GError *error = NULL;
+
 	efhd->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		efhd, EM_TYPE_FORMAT_HTML_DISPLAY, EMFormatHTMLDisplayPrivate);
 
@@ -725,21 +734,23 @@ efhd_init (EMFormatHTMLDisplay *efhd)
 		CAMEL_MIME_FILTER_TOHTML_CONVERT_URLS |
 		CAMEL_MIME_FILTER_TOHTML_CONVERT_ADDRESSES;
 
+/* FIXME WEBKIT There's no way how to get web_view from EFHD for now...
 	image_actions = e_web_view_get_action_group (web_view, "image");
 	g_return_if_fail (image_actions != NULL);
 
 	gtk_action_group_add_actions (
 		image_actions, image_entries,
 		G_N_ELEMENTS (image_entries), efhd);
-
+*/
 	/* Because we are loading from a hard-coded string, there is
 	 * no chance of I/O errors.  Failure here implies a malformed
 	 * UI definition.  Full stop. */
+/* FIXME WEBKIT There 's no way how to get web_view from EFHD for now...
 	ui_manager = e_web_view_get_ui_manager (web_view);
 	gtk_ui_manager_add_ui_from_string (ui_manager, image_ui, -1, &error);
 	if (error != NULL)
 		g_error ("%s", error->message);
-
+*/
 	g_signal_connect (
 		web_view, "update-actions",
 		G_CALLBACK (efhd_web_view_update_actions_cb), efhd);
