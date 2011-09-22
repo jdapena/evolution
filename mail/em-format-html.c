@@ -1678,9 +1678,9 @@ em_format_html_format_cert_infos (CamelCipherCertInfo *first_cinfo)
 			append (cinfo->name);
 
 			if (cinfo->email && *cinfo->email) {
-				append (" &lt;");
+				append (" <");
 				append (cinfo->email);
-				append ("&gt;");
+				append (">");
 			}
 		} else if (cinfo->email && *cinfo->email) {
 			append (cinfo->email);
