@@ -742,10 +742,6 @@ remove_widget (GtkWidget *widget, gpointer user_data)
 		return;
 
 	gtk_container_remove  (GTK_CONTAINER (display->priv->vbox), widget);
-
-	/* We must not destroy attachment bar, it's owned by EMFormatHTMLDisplay */
-	if  (!E_IS_ATTACHMENT_VIEW (widget))
-		gtk_widget_destroy (widget);
 }
 
 void
