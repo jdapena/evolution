@@ -162,7 +162,7 @@ efh_parse_image (EMFormat *emf,
 
 	tmp = camel_mime_part_get_content_id (part);
 	if (!tmp) {
-		em_format_parse_part_as (emf, part, part_id, info, "x-evolution/message-attachment", cancellable);
+		em_format_parse_part_as (emf, part, part_id, info, "x-evolution/message/attachment", cancellable);
 		return;
 	}
 

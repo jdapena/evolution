@@ -374,12 +374,18 @@ efhd_parse_attachment (EMFormat *emf,
                        GCancellable *cancellable)
 {
 	gchar *text, *html;
+	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) emf;
 	EMFormatAttachmentPURI *puri;
+	EAttachmentStore *store;
+	EShell *shell;
+	GtkWindow *window;
+	GtkWidget *parent;
 	const EMFormatHandler *handler;
 	CamelContentType *ct;
 	gchar *mime_type;
 	gint len;
 	const gchar *cid;
+	guint32 size;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
@@ -423,6 +429,51 @@ efhd_parse_attachment (EMFormat *emf,
 	em_format_add_puri (emf, (EMFormatPURI *) puri);
 
 	e_attachment_set_mime_part (puri->attachment, part);
+	e_attachment_set_shown (puri->attachment, puri->shown);
+	e_attachment_set_signed (puri->attachment, puri->sign);
+	e_attachment_set_encrypted (puri->attachment, puri->encrypt);
+	e_attachment_set_can_show (puri->attachment, puri->handle != NULL && puri->handle->write_func);
+
+	/* FIXME: Try to find a better way? */
+	shell = e_shell_get_default ();
+	window = e_shell_get_active_window (shell);
+	if (E_IS_SHELL_WINDOW (window))
+		parent = GTK_WIDGET (window);
+	else
+		parent = NULL;
+
+	store = e_attachment_view_get_store (efhd->priv->attachment_view);
+	e_attachment_store_add_attachment (store, puri->attachment);
+
+	if (emf->folder && emf->folder->summary && emf->message_uid) {
+		CamelMessageInfo *mi;
+
+		mi = camel_folder_summary_uid (emf->folder->summary, emf->message_uid);
+		if (mi) {
+			const CamelMessageContentInfo *ci;
+
+			ci = camel_folder_summary_guess_content_info (mi,
+					camel_mime_part_get_content_type (puri->puri.part));
+			if (ci) {
+				size = ci->size;
+				/* what if its not encoded in base64 ? is it a case to consider? */
+				if (ci->encoding && !g_ascii_strcasecmp (ci->encoding, "base64"))
+					size = size / 1.37;
+			}
+			camel_message_info_free (mi);
+		}
+	}
+
+	e_attachment_load_async (
+		puri->attachment, (GAsyncReadyCallback)
+		e_attachment_load_handle_error, parent);
+	if (size != 0) {
+		GFileInfo *fileinfo;
+
+		fileinfo = e_attachment_get_file_info (puri->attachment);
+		g_file_info_set_size (fileinfo, size);
+		e_attachment_set_file_info (puri->attachment, fileinfo);
+	}
 
 	if (info->validity) {
 		puri->sign = info->validity->sign.status;
@@ -896,19 +947,13 @@ efhd_message_prefix (EMFormat *emf,
 /* attachment button callback */
 static GtkWidget*
 efhd_attachment_button (EMFormat *emf,
-						EMFormatPURI *puri,
-						GCancellable *cancellable)
+			EMFormatPURI *puri,
+			GCancellable *cancellable)
 {
-	EShell *shell;
-	GtkWindow *window;
 	EMFormatAttachmentPURI *info = (EMFormatAttachmentPURI *) puri;
 	EMFormatHTML *efh = (EMFormatHTML *) emf;
 	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) efh;
-	EAttachmentStore *store;
-	EAttachment *attachment;
 	GtkWidget *widget;
-	gpointer parent;
-	guint32 size = 0;
 
 	/* FIXME: handle default shown case */
 	d(printf("adding attachment button/content\n"));
@@ -916,61 +961,14 @@ efhd_attachment_button (EMFormat *emf,
 	if (g_cancellable_is_cancelled (cancellable))
 		return NULL;
 
-	if (emf->folder && emf->folder->summary && emf->message_uid) {
-		CamelMessageInfo *mi;
-
-		mi = camel_folder_summary_get (emf->folder->summary, emf->uid);
-		if (mi) {
-			const CamelMessageContentInfo *ci;
-
-			ci = camel_folder_summary_guess_content_info (mi,
-					camel_mime_part_get_content_type (info->puri.part));
-			if (ci) {
-				size = ci->size;
-				/* what if its not encoded in base64 ? is it a case to consider? */
-				if (ci->encoding && !g_ascii_strcasecmp (ci->encoding, "base64"))
-					size = size / 1.37;
-			}
-			camel_message_info_free (mi);
-		}
-	}
-
 	if (!info || info->forward) {
 		g_warning ("unable to expand the attachment\n");
 		return NULL;
 	}
 
-	attachment = info->attachment;
-	e_attachment_set_shown (attachment, info->shown);
-	e_attachment_set_signed (attachment, info->sign);
-	e_attachment_set_encrypted (attachment, info->encrypt);
-	e_attachment_set_can_show (attachment, info->handle != NULL && info->handle->write_func);
-
-	/* FIXME: Try to find a better way? */
-	shell = e_shell_get_default ();
-	window = e_shell_get_active_window (shell);
-	if (E_IS_SHELL_WINDOW (window))
-		parent = GTK_WIDGET (window);
-	else
-		parent = NULL;
-
-	store = e_attachment_view_get_store (efhd->priv->attachment_view);
-	e_attachment_store_add_attachment (store, info->attachment);
-
-	e_attachment_load_async (
-		info->attachment, (GAsyncReadyCallback)
-		e_attachment_load_handle_error, parent);
-	if (size != 0) {
-		GFileInfo *fileinfo;
-
-		fileinfo = e_attachment_get_file_info (info->attachment);
-		g_file_info_set_size (fileinfo, size);
-		e_attachment_set_file_info (info->attachment, fileinfo);
-	}
-
 	widget = e_attachment_button_new (efhd->priv->attachment_view);
 	e_attachment_button_set_attachment (
-		E_ATTACHMENT_BUTTON (widget), attachment);
+		E_ATTACHMENT_BUTTON (widget), info->attachment);
 	gtk_widget_set_can_focus (widget, TRUE);
 	gtk_widget_show (widget);
 

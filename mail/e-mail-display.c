@@ -670,6 +670,8 @@ e_mail_display_load (EMailDisplay *display,
 					gtk_widget_show (widget);
 				else
 					gtk_widget_hide (widget);
+
+				g_object_ref (widget);
 			} else
 				gtk_widget_show (widget);
 
