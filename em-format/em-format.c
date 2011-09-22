@@ -2153,35 +2153,52 @@ em_format_snoop_type (CamelMimePart *part)
 gchar*
 em_format_build_mail_uri (CamelFolder *folder,
 			  const gchar *message_uid,
-			  const gchar *part_uid)
+			  const gchar *first_param_name,
+			  ...)
 {
 	CamelStore *store;
 	gchar *uri, *tmp;
+	va_list ap;
+	const gchar *name;
+	char separator;
 
 	g_return_val_if_fail (CAMEL_IS_FOLDER (folder), NULL);
 	g_return_val_if_fail (message_uid && *message_uid, NULL);
 
 	store = camel_folder_get_parent_store (folder);
 
-	if (part_uid && *part_uid) {
-		uri = g_strdup_printf ("mail://%s/%s/%s?part_id=%s",
-				camel_service_get_uid (CAMEL_SERVICE (store)),
-				camel_folder_get_full_name (folder),
-				message_uid,
-				part_uid);
-	} else {
-		uri = g_strdup_printf ("mail://%s/%s/%s",
-				camel_service_get_uid (CAMEL_SERVICE (store)),
-				camel_folder_get_full_name (folder),
-				message_uid);
+	tmp = g_strdup_printf ("mail://%s/%s/%s",
+			camel_service_get_uid (CAMEL_SERVICE (store)),
+			camel_folder_get_full_name (folder),
+			message_uid);
+
+	va_start (ap, first_param_name);
+	name = first_param_name;
+	separator = '?';
+	while (name) {
+		gchar *tmp2;
+		gchar *val = va_arg (ap, char *);
+		if (val) {
+			tmp2 = g_strdup_printf ("%s%c%s=%s", tmp, separator, name, val);
+			g_free (tmp);
+			tmp = tmp2;
+		}
+
+		if (separator == '?')
+			separator = '&';
+
+		name = va_arg (ap, char *);
 	}
+	va_end (ap);
+
+	uri = tmp;
 
 	/* For some reason, webkit won't accept URL with username, but
 	 * without password (mail://store@host/folder/mail), so we
 	 * will replace the '@' symbol by '/' to get URL like
 	 * mail://store/host/folder/mail which is OK
 	 */
-	tmp = strchr (uri, '@');
+	tmp = strchr (tmp, '@');
 	if (tmp) {
 		tmp[0] = '/';
 	}

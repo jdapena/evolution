@@ -268,7 +268,8 @@ const gchar*		em_format_snoop_type	 	(CamelMimePart *part);
 
 gchar *			em_format_build_mail_uri	(CamelFolder *folder,
 							 const gchar *message_uid,
-							 const gchar *part_uid);
+							 const gchar *part_uid,
+							 ...) G_GNUC_NULL_TERMINATED;
 
 /* EMFormatParseFunc that does nothing. Use it to disable
  * parsing of a specific mime type parts  */

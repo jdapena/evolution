@@ -340,7 +340,8 @@ mail_display_resource_requested (WebKitWebView *web_view,
 
         /* Redirect cid:part_id to mail://mail_id/cid:part_id */
         if (g_str_has_prefix (uri, "cid:")) {
-		gchar *new_uri = em_format_build_mail_uri (EM_FORMAT (formatter)->folder, EM_FORMAT (formatter)->message_uid, uri);
+		gchar *new_uri = em_format_build_mail_uri (EM_FORMAT (formatter)->folder, 
+			EM_FORMAT (formatter)->message_uid, "part_id", uri, NULL);
 
                 webkit_network_request_set_uri (request, new_uri);
 
@@ -653,7 +654,9 @@ e_mail_display_load (EMailDisplay *display,
 		GtkWidget *widget = NULL;
 
 		puri = iter->data;
-		uri = em_format_build_mail_uri (emf->folder, emf->message_uid, puri->uri);
+		uri = em_format_build_mail_uri (emf->folder, emf->message_uid,
+			"part_id", puri->uri, NULL);
+		g_message ("%s", uri);
 
 		if (puri->widget_func) {
 
