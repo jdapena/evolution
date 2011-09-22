@@ -754,10 +754,11 @@ efhd_init (EMFormatHTMLDisplay *efhd)
 	gtk_ui_manager_add_ui_from_string (ui_manager, image_ui, -1, &error);
 	if (error != NULL)
 		g_error ("%s", error->message);
-*/
+
 	g_signal_connect (
 		web_view, "update-actions",
 		G_CALLBACK (efhd_web_view_update_actions_cb), efhd);
+*/
 }
 
 GType
