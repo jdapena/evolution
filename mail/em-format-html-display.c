@@ -100,6 +100,7 @@ static const gchar *smime_sign_colour[5] = {
 static void efhd_message_prefix 	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void efhd_message_add_bar	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void efhd_parse_attachment	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
+static void efhd_parse_secure		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 
 static GtkWidget* efhd_attachment_bar		(EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
 static GtkWidget* efhd_attachment_button	(EMFormat *emf, EMFormatPURI *puri, GCancellable *cancellable);
@@ -311,7 +312,7 @@ efhd_xpkcs7mime_button (EMFormat *emf,
                         EMFormatPURI *puri,
                         GCancellable *cancellable)
 {
-	GtkWidget *widget;
+	GtkWidget *box, *button, *widget;
 	EMFormatSMIMEPURI *po = (EMFormatSMIMEPURI *) puri;
 	const gchar *icon_name;
 
@@ -321,17 +322,24 @@ efhd_xpkcs7mime_button (EMFormat *emf,
 	else
 		icon_name = smime_encrypt_table[po->valid->encrypt.status].icon;
 
-	widget = gtk_button_new ();
+	box = gtk_hbox_new (FALSE, 5);
+
+	button = gtk_button_new ();
+	gtk_box_pack_start (GTK_BOX (box), button, FALSE, FALSE, 0);
 	g_signal_connect (
-		widget, "clicked",
+		button, "clicked",
 		G_CALLBACK (efhd_xpkcs7mime_validity_clicked), puri);
-	gtk_widget_show (widget);
 
 	widget = gtk_image_new_from_icon_name (
-		icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
-	gtk_widget_show (widget);
+			icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+	gtk_button_set_image (GTK_BUTTON (button), widget);
 
-	return widget;
+	widget = gtk_label_new (po->description);
+	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
+
+	gtk_widget_show_all (box);
+
+	return box;
 }
 
 static void
@@ -459,43 +467,40 @@ efhd_format_optional (EMFormat *emf,
 }
 
 static void
-efhd_format_secure (EMFormat *emf,
-		    EMFormatPURI *puri,
-		    GCancellable *cancellable)
+efhd_parse_secure (EMFormat *emf,
+		   CamelMimePart *part,
+		   GString *part_id,
+		   EMFormatParserInfo *info,
+		   GCancellable *cancellable)
 {
-	EMFormatClass *format_class;
-
-	format_class = g_type_class_peek (EM_TYPE_FORMAT);
-	format_class->format_secure (emf, puri, cancellable);
-
-	if (puri->validity
-	    && (puri->validity->encrypt.status != CAMEL_CIPHER_VALIDITY_ENCRYPT_NONE
-		|| puri->validity->sign.status != CAMEL_CIPHER_VALIDITY_SIGN_NONE)) {
+	if (info->validity
+	    && (info->validity->encrypt.status != CAMEL_CIPHER_VALIDITY_ENCRYPT_NONE
+		|| info->validity->sign.status != CAMEL_CIPHER_VALIDITY_SIGN_NONE)) {
 		GString *buffer;
 		EMFormatSMIMEPURI *pobj;
 
 		pobj = (EMFormatSMIMEPURI *) em_format_puri_new (
-				emf, sizeof (EMFormatSMIMEPURI), puri->part, puri->uri);
+				emf, sizeof (EMFormatSMIMEPURI), part, part_id->str);
 		pobj->puri.free = efhd_xpkcs7mime_free;
-		pobj->valid = camel_cipher_validity_clone (puri->validity);
+		pobj->valid = camel_cipher_validity_clone (info->validity);
 		pobj->puri.widget_func = efhd_xpkcs7mime_button;
 
 		em_format_add_puri (emf, (EMFormatPURI*) pobj);
 
 		buffer = g_string_new ("");
 
-		if (puri->validity->sign.status != CAMEL_CIPHER_VALIDITY_SIGN_NONE) {
+		if (info->validity->sign.status != CAMEL_CIPHER_VALIDITY_SIGN_NONE) {
 			gchar *signers;
 			const gchar *desc;
 			gint status;
 
-			status = puri->validity->sign.status;
+			status = info->validity->sign.status;
 			desc = smime_sign_table[status].shortdesc;
 
 			g_string_append (buffer, gettext (desc));
 
 			signers = em_format_html_format_cert_infos (
-				(CamelCipherCertInfo *) puri->validity->sign.signers.head);
+				(CamelCipherCertInfo *) info->validity->sign.signers.head);
 			if (signers && *signers) {
 				g_string_append_printf (
 					buffer, " (%s)", signers);
@@ -503,14 +508,14 @@ efhd_format_secure (EMFormat *emf,
 			g_free (signers);
 		}
 
-		if (puri->validity->encrypt.status != CAMEL_CIPHER_VALIDITY_ENCRYPT_NONE) {
+		if (info->validity->encrypt.status != CAMEL_CIPHER_VALIDITY_ENCRYPT_NONE) {
 			const gchar *desc;
 			gint status;
 
-			if (puri->validity->sign.status != CAMEL_CIPHER_VALIDITY_SIGN_NONE)
+			if (info->validity->sign.status != CAMEL_CIPHER_VALIDITY_SIGN_NONE)
 				g_string_append (buffer, "\n");
 
-			status = puri->validity->encrypt.status;
+			status = info->validity->encrypt.status;
 			desc = smime_encrypt_table[status].shortdesc;
 			g_string_append (buffer, gettext (desc));
 		}
@@ -706,7 +711,6 @@ efhd_class_init (EMFormatHTMLDisplayClass *class)
 	format_class->format_attachment = efhd_format_attachment;
 */
 	format_class->format_optional = efhd_format_optional;
-	format_class->format_secure = efhd_format_secure;
 
 	format_html_class = EM_FORMAT_HTML_CLASS (class);
 	format_html_class->html_widget_type = E_TYPE_MAIL_DISPLAY;
@@ -793,6 +797,7 @@ static EMFormatHandler type_builtin_table[] = {
 	{ (gchar *) "x-evolution/message/prefix", efhd_message_prefix, },
 	{ (gchar *) "x-evolution/message/attachment-bar", (EMFormatParseFunc) efhd_message_add_bar, },
 	{ (gchar *) "x-evolution/message/attachment", efhd_parse_attachment, },
+	{ (gchar *) "x-evolution/message/x-secure-button", efhd_parse_secure, },
 };
 
 static void
