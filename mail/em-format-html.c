@@ -373,6 +373,9 @@ efh_parse_text_html (EMFormat *emf,
 
 	em_format_add_puri (emf, puri);
 	g_string_truncate (part_id, len);
+
+	if (cid)
+		g_free (cid);
 }
 
 static void

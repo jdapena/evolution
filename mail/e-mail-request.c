@@ -7,7 +7,7 @@
 
 #include "em-format-html.h"
 
-#define d(x) x
+#define d(x)
 
 G_DEFINE_TYPE (EMailRequest, e_mail_request, SOUP_TYPE_REQUEST)
 
@@ -90,6 +90,8 @@ get_file_content (GSimpleAsyncResult *res,
 
 		stream = g_memory_input_stream_new_from_data (contents, length, NULL);
 		g_simple_async_result_set_op_res_gpointer (res, stream, NULL);
+
+		g_free (contents);
 	}
 }
 

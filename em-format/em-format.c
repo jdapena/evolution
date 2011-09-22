@@ -217,7 +217,7 @@ emf_parse_application_xpkcs7mime (EMFormat *emf,
 		EMFormatParserInfo encinfo = {
 				info->handler,
 				EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_SMIME,
-				camel_cipher_validity_clone (valid),
+				valid
 		};
 		gint len = part_id->len;
 
@@ -230,6 +230,8 @@ emf_parse_application_xpkcs7mime (EMFormat *emf,
 		em_format_parse_part_as (emf, part, part_id, &encinfo,
 			"x-evolution/message/x-secure-button", cancellable);
 		g_string_truncate (part_id, len);
+
+		camel_cipher_validity_free (valid);
 	}
 
 	g_object_unref (opart);
@@ -518,6 +520,8 @@ emf_parse_multipart_encrypted (EMFormat *emf,
 		em_format_parse_part_as (emf, part, part_id, &encinfo,
 			"x-evolution/message/x-secure-button", cancellable);
 		g_string_truncate (part_id, len);
+
+		camel_cipher_validity_free (valid);
 	}
 
 	/* TODO: Make sure when we finalize this part, it is zero'd out */
@@ -637,7 +641,7 @@ emf_parse_multipart_signed (EMFormat *emf,
 			EMFormatParserInfo signinfo = {
 					info->handler,
 					validity_type | EM_FORMAT_VALIDITY_FOUND_SIGNED,
-					camel_cipher_validity_clone (valid)
+					valid
 			};
 
 			gint i, nparts, len = part_id->len;
@@ -656,6 +660,8 @@ emf_parse_multipart_signed (EMFormat *emf,
 			em_format_parse_part_as (emf, part, part_id, &signinfo,
 			"x-evolution/message/x-secure-button", cancellable);
 			g_string_truncate (part_id, len);
+
+			camel_cipher_validity_free (valid);
 		}
 	}
 
@@ -882,7 +888,7 @@ emf_parse_inlinepgp_signed (EMFormat *emf,
 	g_string_append (part_id, ".inlinepgp_signed");
 	signinfo.handler = info->handler;
 	signinfo.validity_type = EM_FORMAT_VALIDITY_FOUND_SIGNED | EM_FORMAT_VALIDITY_FOUND_PGP;
-	signinfo.validity = camel_cipher_validity_clone (valid);
+	signinfo.validity = valid;
 	em_format_parse_part (emf, opart, part_id, &signinfo, cancellable);
 	g_string_truncate (part_id, len);
 
@@ -893,6 +899,7 @@ emf_parse_inlinepgp_signed (EMFormat *emf,
 	g_string_truncate (part_id, len);
 
 	/* Clean Up */
+	camel_cipher_validity_free (valid);
 	g_object_unref (dw);
 	g_object_unref (opart);
 	g_object_unref (ostream);
@@ -960,10 +967,10 @@ emf_parse_inlinepgp_encrypted (EMFormat *emf,
 
 	/* Pass it off to the real formatter */
 	len = part_id->len;
-	g_string_append (part_id, ".inlinegpg_encrypted");
+	g_string_append (part_id, ".inlinepgp_encrypted");
 	encinfo.handler = info->handler;
 	encinfo.validity_type = EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_PGP;
-	encinfo.validity = camel_cipher_validity_clone (valid);
+	encinfo.validity = valid;
 	em_format_parse_part (emf, opart, part_id, &encinfo, cancellable);
 	g_string_truncate (part_id, len);
 
@@ -974,6 +981,7 @@ emf_parse_inlinepgp_encrypted (EMFormat *emf,
 	g_string_truncate (part_id, len);
 
 	/* Clean Up */
+	camel_cipher_validity_free (valid);
 	g_object_unref (opart);
 	g_object_unref (cipher);
 }
