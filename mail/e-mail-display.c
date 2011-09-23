@@ -47,7 +47,9 @@ struct _EMailDisplayPrivate {
 	ESearchBar *searchbar;
 	EMFormatHTML *formatter;
 
-	EMailDisplayMode display_mode;
+	EMFormatWriteMode mode;
+	gboolean headers_collapsable;
+	gboolean headers_collapsed;
 
 	GList *webviews;
 };
@@ -55,7 +57,9 @@ struct _EMailDisplayPrivate {
 enum {
 	PROP_0,
 	PROP_FORMATTER,
-	PROP_DISPLAY_MODE
+	PROP_MODE,
+	PROP_HEADERS_COLLAPSABLE,
+	PROP_HEADERS_COLLAPSED
 };
 
 static gpointer parent_class;
@@ -175,10 +179,20 @@ mail_display_set_property (GObject *object,
 				E_MAIL_DISPLAY (object),
 				g_value_get_object (value));
 			return;
-		case PROP_DISPLAY_MODE:
+		case PROP_MODE:
 			e_mail_display_set_mode (
 				E_MAIL_DISPLAY (object),
 				g_value_get_int (value));
+			return;
+		case PROP_HEADERS_COLLAPSABLE:
+			e_mail_display_set_headers_collapsable (
+				E_MAIL_DISPLAY (object),
+				g_value_get_boolean (value));
+			return;
+		case PROP_HEADERS_COLLAPSED:
+			e_mail_display_set_headers_collapsed (
+				E_MAIL_DISPLAY (object),
+				g_value_get_boolean (value));
 			return;
 	}
 
@@ -197,9 +211,19 @@ mail_display_get_property (GObject *object,
 				value, e_mail_display_get_formatter (
 				E_MAIL_DISPLAY (object)));
 			return;
-		case PROP_DISPLAY_MODE:
+		case PROP_MODE:
 			g_value_set_int (
 				value, e_mail_display_get_mode (
+				E_MAIL_DISPLAY (object)));
+			return;
+		case PROP_HEADERS_COLLAPSABLE:
+			g_value_set_boolean (
+				value, e_mail_display_get_headers_collapsable (
+				E_MAIL_DISPLAY (object)));
+			return;
+		case PROP_HEADERS_COLLAPSED:
+			g_value_set_boolean (
+				value, e_mail_display_get_headers_collapsed (
 				E_MAIL_DISPLAY (object)));
 			return;
 	}
@@ -341,7 +365,8 @@ mail_display_resource_requested (WebKitWebView *web_view,
         /* Redirect cid:part_id to mail://mail_id/cid:part_id */
         if (g_str_has_prefix (uri, "cid:")) {
 		gchar *new_uri = em_format_build_mail_uri (EM_FORMAT (formatter)->folder, 
-			EM_FORMAT (formatter)->message_uid, "part_id", uri, NULL);
+			EM_FORMAT (formatter)->message_uid,
+			"part_id", G_TYPE_STRING, uri, NULL);
 
                 webkit_network_request_set_uri (request, new_uri);
 
@@ -386,16 +411,9 @@ mail_display_headers_collapsed_state_changed (EWebView *web_view,
 					      gpointer user_data)
 {
 	EMailDisplay *display = user_data;
-	EMFormatHTML *formatter = display->priv->formatter;
 	JSGlobalContextRef ctx = e_web_view_get_global_context (web_view);
 
-	gboolean collapsed = JSValueToBoolean (ctx, args[0]);
-
-	if (collapsed) {
-		em_format_html_set_headers_state (formatter, EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED);
-	} else {
-		em_format_html_set_headers_state (formatter, EM_FORMAT_HTML_HEADERS_STATE_EXPANDED);
-	}
+	display->priv->headers_collapsed = JSValueToBoolean (ctx, args[0]);
 }
 
 static void
@@ -480,6 +498,105 @@ mail_display_insert_web_view (EMailDisplay *display,
 }
 
 static void
+mail_display_load_as_source (EMailDisplay *display,
+			     const gchar *msg_uid)
+{
+	EWebView *web_view;
+	EMFormat *emf = (EMFormat *) display->priv->formatter;
+	gchar *uri;
+
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	e_mail_display_clear (display);
+
+	web_view = mail_display_setup_webview (display);
+	mail_display_insert_web_view (display, web_view, TRUE);
+
+	uri = em_format_build_mail_uri (emf->folder, emf->message_uid,
+		"part_id", G_TYPE_STRING, ".message",
+		"mode", G_TYPE_INT, display->priv->mode,
+		NULL);
+	e_web_view_load_uri (web_view, uri);
+
+	gtk_widget_show_all (display->priv->vbox);
+}
+
+static void
+mail_display_load_normal (EMailDisplay *display,
+			  const gchar *msg_uid)
+{
+	EWebView *web_view;
+	EMFormatPURI *puri;
+	EMFormat *emf = (EMFormat *) display->priv->formatter;
+	gchar *uri;
+	GList *iter;
+	GtkBox *box;
+
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	/* Don't use gtk_widget_show_all() to display all widgets at once,
+	   it makes all parts of EMailAttachmentBar visible and that's not
+	   what we want.
+	   FIXME: Maybe using gtk_widget_set_no_show_all() in EAttachmentView
+	          could help...
+	*/
+
+	/* First remove all widgets left after previous message */
+	e_mail_display_clear (display);
+
+	box = GTK_BOX (display->priv->vbox);
+	gtk_widget_show (display->priv->vbox);
+
+	for (iter = emf->mail_part_list; iter; iter = iter->next) {
+		GtkWidget *widget = NULL;
+
+		puri = iter->data;
+		uri = em_format_build_mail_uri (emf->folder, emf->message_uid,
+			"part_id", G_TYPE_STRING, puri->uri,
+			"mode", G_TYPE_INT, display->priv->mode,
+			"headers_collapsable", G_TYPE_BOOLEAN, display->priv->headers_collapsable,
+			"headers_collapsed", G_TYPE_BOOLEAN, display->priv->headers_collapsed,
+			NULL);
+
+		if (puri->widget_func) {
+
+			widget = puri->widget_func (emf, puri, NULL);
+			if (!GTK_IS_WIDGET (widget)) {
+				g_message ("Part %s didn't provide a valid widget, skipping!", puri->uri);
+				continue;
+			}
+
+			gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
+			if (E_IS_ATTACHMENT_VIEW (widget)) {
+				EAttachmentStore *store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (widget));
+				if (e_attachment_store_get_num_attachments (store) > 0)
+					gtk_widget_show (widget);
+				else
+					gtk_widget_hide (widget);
+
+				g_object_ref (widget);
+			} else
+				gtk_widget_show (widget);
+
+		}
+
+		if ((!puri->is_attachment && puri->write_func) || (puri->is_attachment && puri->write_func && puri->widget_func)) {
+			web_view = mail_display_setup_webview (display);
+			mail_display_insert_web_view (display, web_view, TRUE);
+			e_web_view_load_uri (web_view, uri);
+
+			if (widget) {
+				g_object_bind_property (widget, "expanded",
+					web_view, "visible", G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
+			}
+
+		}
+
+		g_free (uri);
+	}
+}
+
+static void
 mail_display_class_init (EMailDisplayClass *class)
 {
 	GObjectClass *object_class;
@@ -509,14 +626,34 @@ mail_display_class_init (EMailDisplayClass *class)
 
 	g_object_class_install_property (
 		object_class,
-		PROP_DISPLAY_MODE,
+		PROP_MODE,
 		g_param_spec_int (
-			"display-mode",
+			"mode",
 			"Display Mode",
 			NULL,
-			E_MAIL_DISPLAY_MODE_NORMAL,
-			E_MAIL_DISPLAY_MODE_SOURCE,
-			E_MAIL_DISPLAY_MODE_NORMAL,
+			EM_FORMAT_WRITE_MODE_NORMAL,
+			EM_FORMAT_WRITE_MODE_SOURCE,
+			EM_FORMAT_WRITE_MODE_NORMAL,
+			G_PARAM_READWRITE));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_HEADERS_COLLAPSABLE,
+		g_param_spec_boolean (
+			"headers-collapsable",
+			"Headers Collapsable",
+			NULL,
+			FALSE,
+			G_PARAM_READWRITE));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_HEADERS_COLLAPSED,
+		g_param_spec_boolean (
+			"header-collapsed",
+			"Headers Collapsed",
+			NULL,
+			FALSE,
 			G_PARAM_READWRITE));
 }
 
@@ -600,100 +737,90 @@ e_mail_display_set_formatter (EMailDisplay *display,
 	g_object_notify (G_OBJECT (display), "formatter");
 }
 
-EMailDisplayMode
+EMFormatWriteMode
 e_mail_display_get_mode (EMailDisplay *display)
 {
 	g_return_val_if_fail (E_IS_MAIL_DISPLAY (display),
-			E_MAIL_DISPLAY_MODE_NORMAL);
+			EM_FORMAT_WRITE_MODE_NORMAL);
 
-	return display->priv->display_mode;
+	return display->priv->mode;
 }
 
 void
 e_mail_display_set_mode (EMailDisplay *display,
-			 EMailDisplayMode mode)
+			 EMFormatWriteMode mode)
 {
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
-	if (display->priv->display_mode == mode)
+	if (display->priv->mode == mode)
 		return;
 
-	display->priv->display_mode = mode;
+	display->priv->mode = mode;
+	if (mode == EM_FORMAT_WRITE_MODE_SOURCE)
+		mail_display_load_as_source (display, NULL);
+	else
+		e_mail_display_reload (display);
+
+	g_object_notify (G_OBJECT (display), "mode");
+}
+
+gboolean
+e_mail_display_get_headers_collapsable (EMailDisplay *display)
+{
+	g_return_val_if_fail (E_IS_MAIL_DISPLAY (display), FALSE);
+
+	return display->priv->headers_collapsable;
+}
+
+void
+e_mail_display_set_headers_collapsable (EMailDisplay *display,
+					gboolean collapsable)
+{
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	if (display->priv->headers_collapsable == collapsable)
+		return;
+
+	display->priv->headers_collapsable = collapsable;
 	e_mail_display_reload (display);
 
-	g_object_notify (G_OBJECT (display), "display-mode");
+	g_object_notify (G_OBJECT (display), "header-collapsable");
+}
+
+gboolean
+e_mail_display_get_headers_collapsed (EMailDisplay *display)
+{
+	g_return_val_if_fail (E_IS_MAIL_DISPLAY (display), FALSE);
+
+	if (display->priv->headers_collapsable)
+		return display->priv->headers_collapsed;
+
+	return FALSE;
+}
+
+void
+e_mail_display_set_headers_collapsed (EMailDisplay *display,
+				      gboolean collapsed)
+{
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	if (display->priv->headers_collapsed == collapsed)
+		return;
+
+	display->priv->headers_collapsed = collapsed;
+	e_mail_display_reload (display);
+
+	g_object_notify (G_OBJECT (display), "headers-collapsed");
 }
 
 void
 e_mail_display_load (EMailDisplay *display,
 		     const gchar *msg_uri)
 {
-	EWebView *web_view;
-	EMFormatPURI *puri;
-	EMFormat *emf = (EMFormat *) display->priv->formatter;
-	gchar *uri;
-	GList *iter;
-	GtkBox *box;
-
-	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
-
-	/* Don't use gtk_widget_show_all() to display all widgets at once,
-	   it makes all parts of EMailAttachmentBar visible and that's not
-	   what we want.
-	   FIXME: Maybe using gtk_widget_set_no_show_all() in EAttachmentView
-	          could help...
-	*/
-
-	/* First remove all widgets left after previous message */
-	e_mail_display_clear (display);
-
-	box = GTK_BOX (display->priv->vbox);
-	gtk_widget_show (display->priv->vbox);
-
-	for (iter = emf->mail_part_list; iter; iter = iter->next) {
-		GtkWidget *widget = NULL;
-
-		puri = iter->data;
-		uri = em_format_build_mail_uri (emf->folder, emf->message_uid,
-			"part_id", puri->uri, NULL);
-		g_message ("%s", uri);
-
-		if (puri->widget_func) {
-
-			widget = puri->widget_func (emf, puri, NULL);
-			if (!GTK_IS_WIDGET (widget)) {
-				g_message ("Part %s didn't provide a valid widget, skipping!", puri->uri);
-				continue;
-			}
-
-			gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
-			if (E_IS_ATTACHMENT_VIEW (widget)) {
-				EAttachmentStore *store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (widget));
-				if (e_attachment_store_get_num_attachments (store) > 0)
-					gtk_widget_show (widget);
-				else
-					gtk_widget_hide (widget);
-
-				g_object_ref (widget);
-			} else
-				gtk_widget_show (widget);
-
-		}
-
-		if ((!puri->is_attachment && puri->write_func) || (puri->is_attachment && puri->write_func && puri->widget_func)) {
-			web_view = mail_display_setup_webview (display);
-			mail_display_insert_web_view (display, web_view, TRUE);
-			e_web_view_load_uri (web_view, uri);
-
-			if (widget) {
-				g_object_bind_property (widget, "expanded",
-					web_view, "visible", G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
-			}
-
-		}
-
-		g_free (uri);
-	}
+	if (display->priv->mode == EM_FORMAT_WRITE_MODE_SOURCE)
+		mail_display_load_as_source  (display, msg_uri);
+	else
+		mail_display_load_normal (display, msg_uri);
 }
 
 void
@@ -703,8 +830,50 @@ e_mail_display_reload (EMailDisplay *display)
 
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
+	/* We can't just call e_web_view_reload() here, we need the URI queries
+	   to reflect possible changes in write mode and headers properties.
+	   Unfortunatelly, nothing provides API good enough to do this more
+	   simple way... */
+
 	for (iter = display->priv->webviews; iter; iter = iter->next) {
-		e_web_view_reload ((EWebView *) (iter->data));
+		EWebView *web_view;
+		const gchar *uri;
+		gchar *base;
+		GString *new_uri;
+		GHashTable *table;
+		GHashTableIter table_iter;
+		gpointer key, val;
+		char separator;
+
+		web_view = (EWebView *) iter->data;
+		uri = e_web_view_get_uri (web_view);
+
+		if (!uri)
+			continue;
+
+		base = g_strndup (uri, strstr (uri, "?") - uri);
+		new_uri = g_string_new (base);
+		g_free (base);
+
+		table = soup_form_decode (strstr (uri, "?") + 1);
+		g_hash_table_insert (table, g_strdup ("mode"), g_strdup_printf ("%d", display->priv->mode));
+		g_hash_table_insert (table, g_strdup ("headers_collapsable"), g_strdup_printf ("%d", display->priv->headers_collapsable));
+		g_hash_table_insert (table, g_strdup ("headers_collapsed"), g_strdup_printf ("%d", display->priv->headers_collapsed));
+
+		g_hash_table_iter_init (&table_iter, table);
+		separator = '?';
+		while (g_hash_table_iter_next (&table_iter, &key, &val)) {
+			g_string_append_printf (new_uri, "%c%s=%s", separator,
+				(gchar *) key, (gchar *) val);
+
+			if (separator == '?')
+				separator = '&';
+		}
+
+		e_web_view_load_uri (web_view, new_uri->str);
+
+		g_string_free (new_uri, TRUE);
+		g_hash_table_destroy (table);
 	}
 }
 

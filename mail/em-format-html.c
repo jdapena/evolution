@@ -68,9 +68,6 @@ struct _EMFormatHTMLPrivate {
 	GdkColor colors[EM_FORMAT_HTML_NUM_COLOR_TYPES];
 	EMailImageLoadingPolicy image_loading_policy;
 
-	EMFormatHTMLHeadersState headers_state;
-	gboolean headers_collapsable;
-
 	guint load_images_now	: 1;
 	guint only_local_photos	: 1;
 	guint show_sender_photo	: 1;
@@ -92,8 +89,6 @@ enum {
 	PROP_SHOW_SENDER_PHOTO,
 	PROP_SHOW_REAL_DATE,
 	PROP_TEXT_COLOR,
-	PROP_HEADERS_STATE,
-	PROP_HEADERS_COLLAPSABLE
 };
 
 #define EFM_MESSAGE_START_ANAME "evolution_message_start"
@@ -136,13 +131,17 @@ static void efh_parse_message_external		(EMFormat *emf, CamelMimePart *part, GSt
 static void efh_parse_message_deliverystatus	(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 static void efh_parse_message_rfc822		(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 
-static void efh_write_image			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void efh_write_text_enriched		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void efh_write_text_plain		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void efh_write_text_html			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void efh_write_source			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void efh_write_message_rfc822		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void efh_write_headers			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
+static void efh_write_image			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void efh_write_text_enriched		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void efh_write_text_plain		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void efh_write_text_html			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void efh_write_source			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void efh_write_message_rfc822		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void efh_write_headers			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+
+static void efh_format_full_headers 		(EMFormatHTML *efh, GString *buffer, CamelMedium *part, gboolean all_headers, gboolean visible, GCancellable *cancellable);
+static void efh_format_short_headers 		(EMFormatHTML *efh, GString *buffer, CamelMedium *part, gboolean visible, GCancellable *cancellable);
+
 /*****************************************************************************/
 static void
 efh_parse_image (EMFormat *emf,
@@ -565,6 +564,7 @@ static void
 efh_write_image (EMFormat *emf,
 		 EMFormatPURI *puri,
 		 CamelStream *stream,
+ 		 EMFormatWriterInfo *info,
 		 GCancellable *cancellable)
 {
 	GByteArray *ba;
@@ -598,6 +598,7 @@ static void
 efh_write_text_enriched (EMFormat *emf,
 			 EMFormatPURI *puri,
 			 CamelStream *stream,
+			 EMFormatWriterInfo *info,
 			 GCancellable *cancellable)
 {
 	EMFormatHTML *efh = EM_FORMAT_HTML (emf);
@@ -665,6 +666,7 @@ static void
 efh_write_text_plain (EMFormat *emf,
 		      EMFormatPURI *puri,
 		      CamelStream *stream,
+ 		      EMFormatWriterInfo *info,
 		      GCancellable *cancellable)
 {
 	CamelDataWrapper *dw;
@@ -717,6 +719,7 @@ static void
 efh_write_text_html (EMFormat *emf,
 		     EMFormatPURI *puri,
 		     CamelStream *stream,
+		     EMFormatWriterInfo *info,
 		     GCancellable *cancellable)
 {
 	if (g_cancellable_is_cancelled (cancellable))
@@ -730,8 +733,11 @@ static void
 efh_write_source (EMFormat *emf,
 		  EMFormatPURI *puri,
 		  CamelStream *stream,
+		  EMFormatWriterInfo *info,
 		  GCancellable *cancellable)
 {
+	EMFormatHTML *efh = (EMFormatHTML *) emf;
+	GString *buffer;
 	CamelStream *filtered_stream;
 	CamelMimeFilter *filter;
 	CamelDataWrapper *dw = (CamelDataWrapper *) puri->part;
@@ -746,23 +752,75 @@ efh_write_source (EMFormat *emf,
 		CAMEL_STREAM_FILTER (filtered_stream), filter);
 	g_object_unref (filter);
 
+	buffer = g_string_new ("");
+	g_string_append_printf (
+		buffer, EFH_HTML_HEADER,
+		e_color_to_value (
+			&efh->priv->colors[
+			EM_FORMAT_HTML_COLOR_BODY]),
+		e_color_to_value (
+			&efh->priv->colors[
+			EM_FORMAT_HTML_COLOR_HEADER]));
+	camel_stream_write_string (
+		stream, buffer->str, cancellable, NULL);
 	camel_stream_write_string (
 		stream, "<code class=\"pre\">", cancellable, NULL);
-	em_format_format_text (emf, filtered_stream, dw, cancellable);
+	camel_data_wrapper_write_to_stream_sync (dw, filtered_stream,
+		cancellable, NULL);
 	camel_stream_write_string (
 		stream, "</code>", cancellable, NULL);
 
 	g_object_unref (filtered_stream);
+	g_string_free (buffer, TRUE);
 }
 
 static void
 efh_write_headers (EMFormat *emf,
 		   EMFormatPURI *puri,
 		   CamelStream *stream,
+		   EMFormatWriterInfo *info,
 		   GCancellable *cancellable)
 {
-	/* FIXME: We could handle this more nicely */
-	em_format_html_format_headers ((EMFormatHTML *) emf, stream, (CamelMedium *)  puri->part, FALSE, cancellable);
+	GString *buffer;
+	EMFormatHTML *efh = (EMFormatHTML *) emf;
+
+	if (!puri->part)
+		return;
+
+	buffer = g_string_new ("");
+
+	g_string_append_printf (
+		buffer, EFH_HTML_HEADER,
+		e_color_to_value (
+			&efh->priv->colors[
+			EM_FORMAT_HTML_COLOR_BODY]),
+		e_color_to_value (
+			&efh->priv->colors[
+			EM_FORMAT_HTML_COLOR_HEADER]));
+
+	g_string_append (buffer, "<table border=\"0\" width=\"100%\"><tr><td valign=\"top\" width=\"16\">");
+
+	if (info->headers_collapsable) {
+		g_string_append_printf (buffer,
+			"<img src=\"evo-file://%s/%s\" onClick=\"collapse_headers();\" class=\"navigable\" id=\"collapse-headers-img\" /></td><td>",
+			EVOLUTION_IMAGESDIR,
+			(info->headers_collapsed) ? "plus.png" : "minus.png");
+
+		efh_format_short_headers (efh, buffer, (CamelMedium *) puri->part,
+			info->headers_collapsed,
+			cancellable);
+	}
+
+	efh_format_full_headers (efh, buffer, (CamelMedium *) puri->part,
+		(info->mode == EM_FORMAT_WRITE_MODE_ALL_HEADERS),
+		!info->headers_collapsed,
+		cancellable);
+
+	g_string_append (buffer, "</td></tr></table>" EFH_HTML_FOOTER);
+
+	camel_stream_write_string (stream, buffer->str, cancellable, NULL);
+
+	g_string_free (buffer, true);
 }
 
 /*****************************************************************************/
@@ -812,6 +870,7 @@ static EMFormatHandler type_builtin_table[] = {
 	/* special internal types */
 	{ (gchar *) "x-evolution/message/rfc822", 0, efh_write_text_plain, },
 	{ (gchar *) "x-evolution/message/headers", 0, efh_write_headers, },
+	{ (gchar *) "x-evolution/message/source", 0, efh_write_source, },
 };
 
 static void
@@ -905,15 +964,6 @@ efh_set_property (GObject *object,
 				EM_FORMAT_HTML_COLOR_TEXT,
 				g_value_get_boxed (value));
 			return;
-		case PROP_HEADERS_STATE:
-			em_format_html_set_headers_state (
-				EM_FORMAT_HTML (object),
-				g_value_get_int (value));
-			return;
-		case PROP_HEADERS_COLLAPSABLE:
-			em_format_html_set_headers_collapsable (
-				EM_FORMAT_HTML (object),
-				g_value_get_boolean (value));
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1006,16 +1056,6 @@ efh_get_property (GObject *object,
 				&color);
 			g_value_set_boxed (value, &color);
 			return;
-
-		case PROP_HEADERS_STATE:
-			g_value_set_int (
-				value, em_format_html_get_headers_state (
-				EM_FORMAT_HTML (object)));
-			return;
-		case PROP_HEADERS_COLLAPSABLE:
-			g_value_set_boolean (
-				value, em_format_html_get_headers_collapsable (
-				EM_FORMAT_HTML (object)));
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1084,10 +1124,10 @@ efh_format_source (EMFormat *emf,
 	g_object_unref (filter);
 
 	camel_stream_write_string (
-		stream, "<code class=\"pre\">", cancellable, NULL);
+		stream, EFH_HTML_HEADER "<code class=\"pre\">", cancellable, NULL);
 	em_format_format_text (emf, filtered_stream, dw, cancellable);
 	camel_stream_write_string (
-		stream, "</code>", cancellable, NULL);
+		stream, "</code>" EFH_HTML_FOOTER, cancellable, NULL);
 
 	g_object_unref (filtered_stream);
 }
@@ -1276,28 +1316,6 @@ efh_class_init (EMFormatHTMLClass *class)
 			GDK_TYPE_COLOR,
 			G_PARAM_READWRITE));
 
-	g_object_class_install_property (
-		object_class,
-		PROP_HEADERS_STATE,
-		g_param_spec_int (
-			"headers-state",
-			"Headers state",
-			NULL,
-			EM_FORMAT_HTML_HEADERS_STATE_EXPANDED,
-			EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED,
-			EM_FORMAT_HTML_HEADERS_STATE_EXPANDED,
-			G_PARAM_READWRITE));
-
-	g_object_class_install_property (
-		object_class,
-		PROP_HEADERS_COLLAPSABLE,
-		g_param_spec_boolean (
-			"headers-collapsable",
-			NULL,
-			NULL,
-			FALSE,
-			G_PARAM_READWRITE));
-
 	/* cache expiry - 2 hour access, 1 day max */
 
 	/* FIXME WEBKIT - this emfh_http_cache is not used anywhere - remove?
@@ -1348,7 +1366,6 @@ efh_init (EMFormatHTML *efh,
 		CAMEL_MIME_FILTER_TOHTML_CONVERT_SPACES |
 		CAMEL_MIME_FILTER_TOHTML_MARK_CITATION;
 	efh->show_icon = TRUE;
-	efh->state = EM_FORMAT_HTML_STATE_NONE;
 
 	/* FIXME WEBKIT: emit signal? */
 	/*
@@ -1582,44 +1599,6 @@ em_format_html_set_show_real_date (EMFormatHTML *efh,
 	efh->priv->show_real_date =	show_real_date;
 
 	g_object_notify (G_OBJECT (efh), "show-real-date");
-}
-
-EMFormatHTMLHeadersState
-em_format_html_get_headers_state (EMFormatHTML *efh)
-{
-	g_return_val_if_fail (EM_IS_FORMAT_HTML (efh), EM_FORMAT_HTML_HEADERS_STATE_EXPANDED);
-
-	return efh->priv->headers_state;
-}
-
-void
-em_format_html_set_headers_state (EMFormatHTML *efh,
-				  EMFormatHTMLHeadersState state)
-{
-	g_return_if_fail (EM_IS_FORMAT_HTML (efh));
-
-	efh->priv->headers_state = state;
-
-	g_object_notify (G_OBJECT (efh), "headers-state");
-}
-
-gboolean
-em_format_html_get_headers_collapsable (EMFormatHTML *efh)
-{
-	g_return_val_if_fail (EM_IS_FORMAT_HTML (efh), FALSE);
-
-	return efh->priv->headers_collapsable;
-}
-
-void
-em_format_html_set_headers_collapsable (EMFormatHTML *efh,
-					gboolean collapsable)
-{
-	g_return_if_fail (EM_IS_FORMAT_HTML (efh));
-
-	efh->priv->headers_collapsable = collapsable;
-
-	g_object_notify (G_OBJECT (efh), "headers-collapsable");
 }
 
 CamelMimePart *
@@ -2405,50 +2384,6 @@ efh_format_full_headers (EMFormatHTML *efh,
 	g_string_append (buffer, "</tr></table>");
 }
 
-void
-em_format_html_format_headers (EMFormatHTML *efh,
-			       CamelStream *stream,
-			       CamelMedium *part,
-			       gboolean all_headers,
-			       GCancellable *cancellable)
-{
-	GString *buffer;
-
-	if (!part)
-		return;
-
-	buffer = g_string_new ("");
-
-	g_string_append_printf (
-		buffer, EFH_HTML_HEADER,
-		e_color_to_value (
-			&efh->priv->colors[
-			EM_FORMAT_HTML_COLOR_BODY]),
-		e_color_to_value (
-			&efh->priv->colors[
-			EM_FORMAT_HTML_COLOR_HEADER]));
-
-	if (efh->priv->headers_collapsable) {
-		g_string_append_printf (buffer,
-			"<img src=\"evo-file://%s/%s\" onClick=\"collapse_headers();\" class=\"navigable\" id=\"collapse-headers-img\" /></td><td>",
-			EVOLUTION_IMAGESDIR,
-			(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED) ? "plus.png" : "minus.png");
-
-		efh_format_short_headers (efh, buffer, part,
-			(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED),
-			cancellable);
-	}
-
-	efh_format_full_headers (efh, buffer, part, all_headers,
-		(efh->priv->headers_state == EM_FORMAT_HTML_HEADERS_STATE_EXPANDED),
-		cancellable);
-
-	g_string_append (buffer, "</td></tr></table>" EFH_HTML_FOOTER);
-
-	camel_stream_write_string (stream, buffer->str, cancellable, NULL);
-
-	g_string_free (buffer, true);
-}
 
 /* unref returned pointer with g_object_unref(), if not NULL */
 CamelStream *

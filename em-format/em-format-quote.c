@@ -48,13 +48,13 @@ static void emfq_builtin_init (EMFormatQuoteClass *efhc);
 
 static CamelMimePart * decode_inline_parts (CamelMimePart *part, GCancellable *cancellable);
 
-static void emfq_write_text_plain	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void emfq_write_text_enriched	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void emfq_write_text_html	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void emfq_write_message_rfc822	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
-static void emfq_write_message_prefix	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
+static void emfq_write_text_plain	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void emfq_write_text_enriched	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void emfq_write_text_html	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void emfq_write_message_rfc822	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
+static void emfq_write_message_prefix	(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
 /* FIXME WEBKIT */
-static void emfq_write_source		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable);
+static void emfq_write_source		(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable);
 
 static gpointer parent_class;
 
@@ -190,6 +190,7 @@ static void
 emfq_write_source (EMFormat *emf,
 		   EMFormatPURI *puri,
 		   CamelStream *stream,
+		   EMFormatWriterInfo *info,
                    GCancellable *cancellable)
 {
 	CamelStream *filtered_stream;
@@ -218,6 +219,7 @@ static void
 emfq_write_attachment (EMFormat *emf,
 		       EMFormatPURI *puri,
                        CamelStream *stream,
+                       EMFormatWriterInfo *info,
                        GCancellable *cancellable)
 {
 	EMFormatQuote *emfq = EM_FORMAT_QUOTE (emf);
@@ -256,7 +258,7 @@ emfq_write_attachment (EMFormat *emf,
 		stream, "</font></td></tr></table>", cancellable, NULL);
 
 	if (handler && handler->write_func)
-		handler->write_func (emf, puri, stream, cancellable);
+		handler->write_func (emf, puri, stream, info, cancellable);
 }
 
 static void
@@ -595,6 +597,7 @@ static void
 emfq_write_message_prefix (EMFormat *emf,
 			   EMFormatPURI *puri,
 			   CamelStream *stream,
+			   EMFormatWriterInfo *info,
 			   GCancellable *cancellable)
 {
 	EMFormatQuote *emfq = (EMFormatQuote *) emf;
@@ -611,6 +614,7 @@ static void
 emfq_write_message_rfc822 (EMFormat *emf,
                      	   EMFormatPURI *puri,
                      	   CamelStream *stream,
+                     	   EMFormatWriterInfo *info,
                      	   GCancellable *cancellable)
 {
 	EMFormatQuote *emfq = (EMFormatQuote *) emf;
@@ -637,7 +641,7 @@ emfq_write_message_rfc822 (EMFormat *emf,
 	camel_stream_write (
 		stream, buffer->str, buffer->len, cancellable, NULL);
 
-	puri->write_func (emf, puri, stream, cancellable);
+	puri->write_func (emf, puri, stream, info, cancellable);
 
 	if (emfq->priv->flags & EM_FORMAT_QUOTE_CITE)
 		camel_stream_write_string (
@@ -653,6 +657,7 @@ static void
 emfq_write_text_plain (EMFormat *emf,
 		       EMFormatPURI *puri,
 		       CamelStream *stream,
+		       EMFormatWriterInfo *info,
 		       GCancellable *cancellable)
 {
 	EMFormatQuote *emfq = EM_FORMAT_QUOTE (emf);
@@ -716,6 +721,7 @@ static void
 emfq_write_text_enriched (EMFormat *emf,
 			  EMFormatPURI *puri,
                     	  CamelStream *stream,
+                    	  EMFormatWriterInfo *info,
                     	  GCancellable *cancellable)
 {
 	CamelStream *filtered_stream;
@@ -758,6 +764,7 @@ static void
 emfq_write_text_html (EMFormat *emf,
 		      EMFormatPURI *puri,
 	              CamelStream *stream,
+	              EMFormatWriterInfo *info,
 	              GCancellable *cancellable)
 {
 	EMFormatQuotePrivate *priv;

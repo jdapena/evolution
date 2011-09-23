@@ -56,6 +56,8 @@ struct _EMailBrowserPrivate {
 	EFocusTracker *focus_tracker;
 	EMailDisplay *display;
 
+	EMFormatWriteMode mode;
+
 	GtkWidget *main_menu;
 	GtkWidget *main_toolbar;
 	GtkWidget *message_list;
@@ -74,7 +76,7 @@ enum {
 	PROP_GROUP_BY_THREADS,
 	PROP_SHOW_DELETED,
 	PROP_REPLY_STYLE,
-	PROP_UI_MANAGER
+	PROP_UI_MANAGER,
 };
 
 static gpointer parent_class;
@@ -574,7 +576,8 @@ mail_browser_constructed (GObject *object)
 	gtk_application_add_window (
 		GTK_APPLICATION (shell), GTK_WINDOW (object));
 
-	priv->display = e_mail_reader_get_mail_display (reader);
+	//priv->display = e_mail_reader_get_mail_display (reader);
+	e_mail_display_set_mode (priv->display, E_MAIL_BROWSER (object)->priv->mode);
 
 	/* The message list is a widget, but it is not shown in the browser.
 	 * Unfortunately, the widget is inseparable from its model, and the
@@ -686,8 +689,6 @@ mail_browser_constructed (GObject *object)
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
 	priv->alert_bar = g_object_ref (widget);
 	/* EAlertBar controls its own visibility. */
-
-	gtk_widget_show (GTK_WIDGET (priv->display));
 
 	widget = GTK_WIDGET (priv->display);
 	gtk_box_pack_start (GTK_BOX (container), widget, TRUE, TRUE, 0);
@@ -949,6 +950,7 @@ e_mail_browser_class_init (EMailBrowserClass *class)
 			"Show deleted messages",
 			FALSE,
 			G_PARAM_READWRITE));
+
 }
 
 static void
@@ -994,13 +996,20 @@ GtkWidget *
 e_mail_browser_new (EMailBackend *backend,
 		    CamelFolder *folder,
 		    const gchar *msg_uid,
-		    EMailDisplayMode mode)
+		    EMFormatWriteMode mode)
 {
+	GtkWidget *widget;
+
 	g_return_val_if_fail (E_IS_MAIL_BACKEND (backend), NULL);
 
-	return g_object_new (
+	widget= g_object_new (
 		E_TYPE_MAIL_BROWSER,
-		"backend", backend, NULL);
+		"backend", backend,
+		NULL);
+
+	E_MAIL_BROWSER (widget)->priv->mode = mode;
+
+	return widget;
 }
 
 void

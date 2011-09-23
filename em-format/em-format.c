@@ -79,8 +79,8 @@ static void emf_parse_post_headers		(EMFormat *emf, CamelMimePart *part, GString
 static void emf_parse_source			(EMFormat *emf, CamelMimePart *part, GString *part_id, EMFormatParserInfo *info, GCancellable *cancellable);
 
 /* WRITERS */
-static void emf_write_text			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable) {};
-static void emf_write_source			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, GCancellable *cancellable) {}
+static void emf_write_text			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable) {};
+static void emf_write_source			(EMFormat *emf, EMFormatPURI *puri, CamelStream *stream, EMFormatWriterInfo *info, GCancellable *cancellable) {};
 
 static void emf_error				(EMFormat *emf, const gchar *message) {};
 static void emf_source				(EMFormat *emf, CamelStream *stream, GCancellable *cancellable);
@@ -1054,7 +1054,7 @@ emf_parse_source (EMFormat *emf,
 	g_string_append (part_id, ".source");
 
 	puri = em_format_puri_new (emf, sizeof (EMFormatPURI), part, part_id->str);
-	puri->write_func = emf_write_source;
+	puri->write_func = info->handler->write_func;
 	puri->mime_type = g_strdup ("text/html");
 	g_string_truncate (part_id, len);
 
@@ -1067,6 +1067,7 @@ void
 em_format_empty_writer (EMFormat *emf,
 			EMFormatPURI *puri,
 			CamelStream *stream,
+			EMFormatWriterInfo *info,
 			GCancellable *cancellable)
 {
 	/* DO NOTHING */
@@ -1100,6 +1101,7 @@ emf_parse (EMFormat *emf,
 	   GCancellable *cancellable)
 {
 	GString *part_id;
+	EMFormatPURI *puri;
 	EMFormatParserInfo info = { 0 };
 
 	g_return_if_fail (EM_IS_FORMAT (emf));
@@ -1127,6 +1129,12 @@ emf_parse (EMFormat *emf,
 	g_return_if_fail (emf->folder);
 
 	part_id = g_string_new ("");
+
+	/* Create a special PURI with entire message */
+	puri = em_format_puri_new (emf, sizeof (EMFormatPURI),
+		(CamelMimePart *) message, ".message");
+	puri->mime_type = g_strdup ("text/html");
+	em_format_add_puri (emf, puri);
 
 	em_format_parse_part_as (emf, CAMEL_MIME_PART (message), part_id, &info,
 			"x-evolution/message", cancellable);
@@ -1192,7 +1200,7 @@ static EMFormatHandler type_handlers[] = {
 		{ (gchar *) "x-evolution/message", emf_parse_message, },
 		{ (gchar *) "x-evolution/message/headers", emf_parse_headers, },
 		{ (gchar *) "x-evolution/message/post-headers", emf_parse_post_headers, },
-		{ (gchar *) "x-evolution/message/source", emf_parse_source, },
+		{ (gchar *) "x-evolution/message/source", emf_parse_source, emf_write_source },
 };
 
 /* note: also copied in em-mailer-prefs.c */
@@ -2177,12 +2185,32 @@ em_format_build_mail_uri (CamelFolder *folder,
 	separator = '?';
 	while (name) {
 		gchar *tmp2;
-		gchar *val = va_arg (ap, char *);
-		if (val) {
-			tmp2 = g_strdup_printf ("%s%c%s=%s", tmp, separator, name, val);
-			g_free (tmp);
-			tmp = tmp2;
+		gint type = va_arg (ap, int);
+		switch (type) {
+			case G_TYPE_INT:
+			case G_TYPE_BOOLEAN: {
+				gint val = va_arg (ap, int);
+				tmp2 = g_strdup_printf ("%s%c%s=%d", tmp, separator, name, val);
+				break;
+			}
+			case G_TYPE_FLOAT:
+			case G_TYPE_DOUBLE: {
+				gdouble val = va_arg (ap, double);
+				tmp2 = g_strdup_printf ("%s%c%s=%f", tmp, separator, name, val);
+				break;
+			}
+			case G_TYPE_STRING: {
+				gchar *val = va_arg (ap, char *);
+				tmp2 = g_strdup_printf ("%s%c%s=%s", tmp, separator, name, val);
+				break;
+			}
+			default:
+				g_warning ("Invalid param type %s", g_type_name (type));
+				return NULL;
 		}
+
+		g_free (tmp);
+		tmp = tmp2;
 
 		if (separator == '?')
 			separator = '&';
@@ -2264,13 +2292,21 @@ em_format_puri_free (EMFormatPURI *puri)
 void
 em_format_puri_write (EMFormatPURI *puri,
 		      CamelStream *stream,
+		      EMFormatWriterInfo *info,
 		      GCancellable *cancellable)
 {
 	g_return_if_fail (puri);
 	g_return_if_fail (CAMEL_IS_STREAM (stream));
 
+	if (info->mode == EM_FORMAT_WRITE_MODE_SOURCE) {
+		const EMFormatHandler *handler;
+		handler = em_format_find_handler (puri->emf, "x-evolution/message/source");
+		handler->write_func (puri->emf, puri, stream, info, cancellable);
+		return;
+	}
+
 	if (puri->write_func) {
-		puri->write_func (puri->emf, puri, stream, cancellable);
+		puri->write_func (puri->emf, puri, stream, info, cancellable);
 	} else {
 		const EMFormatHandler *handler;
 		const gchar *mime_type;
@@ -2284,7 +2320,7 @@ em_format_puri_write (EMFormatPURI *puri,
 		handler = em_format_find_handler (puri->emf, mime_type);
 		if (handler && handler->write_func) {
 			handler->write_func (puri->emf,
-					puri, stream, cancellable);
+					puri, stream, info, cancellable);
 		}
 	}
 }

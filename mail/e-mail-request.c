@@ -48,7 +48,22 @@ start_mail_formatting (GSimpleAsyncResult *res,
 	if (part_id) {
 		request->priv->puri = em_format_find_puri (emf, part_id);
 		if (request->priv->puri) {
-			em_format_puri_write (request->priv->puri, request->priv->output_stream, NULL);
+			EMFormatWriterInfo info = {0};
+			gchar *val;
+
+			val = g_hash_table_lookup (request->priv->uri_query, "headers_collapsed");
+			if (val)
+				info.headers_collapsed = atoi (val);
+
+			val = g_hash_table_lookup (request->priv->uri_query, "headers_collapsable");
+			if (val)
+				info.headers_collapsable = atoi (val);
+
+			val = g_hash_table_lookup (request->priv->uri_query, "mode");
+			if (val)
+				info.mode = atoi (val);
+
+			em_format_puri_write (request->priv->puri, request->priv->output_stream, &info, NULL);
 		} else {
 			g_warning ("Failed to lookup requested part '%s' - this should not happen!", part_id);
 		}
@@ -84,14 +99,16 @@ get_file_content (GSimpleAsyncResult *res,
 	uri = soup_request_get_uri (SOUP_REQUEST (request));
 
 	if (g_file_get_contents (uri->path, &contents, &length, NULL)) {
-		request->priv->mime_type = g_content_type_guess (uri->path, NULL, 0, NULL);
 
+		request->priv->mime_type = g_content_type_guess (uri->path, NULL, 0, NULL);
 		request->priv->content_length = length;
 
 		stream = g_memory_input_stream_new_from_data (contents, length, NULL);
 		g_simple_async_result_set_op_res_gpointer (res, stream, NULL);
 
-		g_free (contents);
+		/* FIXME - Freeing the data empties the result stream, but without it
+		   the #contents leaks memory */
+		//g_free (contents);
 	}
 }
 
@@ -165,7 +182,6 @@ mail_request_send_async (SoupRequest *request,
 			g_return_if_fail (uri->query);
 		}
 
-		/* SoupURI has no API to get URI without queries */
 		uri_str = g_strdup_printf ("%s://%s%s", uri->scheme, uri->host, uri->path);
 
 		emr->priv->efh = g_object_get_data (G_OBJECT (session), uri_str);
@@ -220,20 +236,20 @@ static const gchar*
 mail_request_get_content_type (SoupRequest *request)
 {
 	EMailRequest *emr = E_MAIL_REQUEST (request);
+	const gchar *mime_type;
 
 	if (emr->priv->mime_type)
-		return emr->priv->mime_type;
-
-	if (!emr->priv->puri)
-		return "text/html";
-
-	if (!emr->priv->puri->mime_type) {
+		mime_type = emr->priv->mime_type;
+	else if (!emr->priv->puri)
+		mime_type = "text/html";
+	else if (!emr->priv->puri->mime_type) {
 		CamelContentType *ct = camel_mime_part_get_content_type (emr->priv->puri->part);
-		return camel_content_type_format (ct);
+		mime_type = camel_content_type_format (ct);
 	} else
-		return emr->priv->puri->mime_type;
+		mime_type = emr->priv->puri->mime_type;
 
-	return "text/html";
+	d(printf("Content-Type: %s\n", mime_type));
+	return mime_type;
 }
 
 static const char *data_schemes[] = { "mail", "evo-file", NULL };
