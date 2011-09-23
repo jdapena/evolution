@@ -65,16 +65,6 @@ enum _em_format_html_header_flags {
 };
 
 typedef enum {
-	EM_FORMAT_HTML_STATE_NONE = 0,
-	EM_FORMAT_HTML_STATE_RENDERING
-} EMFormatHTMLState;
-
-typedef enum {
-	EM_FORMAT_HTML_HEADERS_STATE_EXPANDED = 0, /* Default value */
-	EM_FORMAT_HTML_HEADERS_STATE_COLLAPSED
-} EMFormatHTMLHeadersState;
-
-typedef enum {
 	EM_FORMAT_HTML_COLOR_BODY,	/* header area background */
 	EM_FORMAT_HTML_COLOR_CITATION,	/* citation font color */
 	EM_FORMAT_HTML_COLOR_CONTENT,	/* message area background */
@@ -135,8 +125,6 @@ struct _EMFormatHTML {
 	guint hide_headers:1; /* no headers at all */
 	guint show_icon:1; /* show an icon when the sender used Evo */
 	guint32 header_wrap_flags;
-
-	EMFormatHTMLState state; /* actual state of the object */
 };
 
 struct _EMFormatHTMLClass {
@@ -179,17 +167,6 @@ gboolean	em_format_html_get_show_real_date
 void		em_format_html_set_show_real_date
 						(EMFormatHTML *efh,
 						 gboolean show_real_date);
-EMFormatHTMLHeadersState
-		em_format_html_get_headers_state
-						(EMFormatHTML *efh);
-void		em_format_html_set_headers_state
-						(EMFormatHTML *efh,
-						 EMFormatHTMLHeadersState state);
-gboolean	em_format_html_get_headers_collapsable
-						(EMFormatHTML *efh);
-void		em_format_html_set_headers_collapsable
-						(EMFormatHTML *efh,
-						 gboolean collapsable);
 
 /* retrieves a pseudo-part icon wrapper for a file */
 CamelMimePart *	em_format_html_file_part	(EMFormatHTML *efh,

@@ -1577,9 +1577,9 @@ action_mail_show_all_headers_cb (GtkToggleAction *action,
 	display = e_mail_reader_get_mail_display (reader);
 
 	if (gtk_toggle_action_get_active (action))
-		e_mail_display_set_mode (display, E_MAIL_DISPLAY_MODE_ALL_HEADERS);
+		e_mail_display_set_mode (display, EM_FORMAT_WRITE_MODE_ALL_HEADERS);
 	else
-		e_mail_display_set_mode (display, E_MAIL_DISPLAY_MODE_NORMAL);
+		e_mail_display_set_mode (display, EM_FORMAT_WRITE_MODE_NORMAL);
 }
 
 static void
@@ -1588,22 +1588,29 @@ action_mail_show_source_cb (GtkAction *action,
 {
 	EMailBackend *backend;
 	EMailDisplay *display;
+	EMFormatHTML *formatter;
 	CamelFolder *folder;
 	GtkWidget *browser;
 	GPtrArray *uids;
+	EMFormatWriteMode mode;
 	const gchar *message_uid;
 
 	backend = e_mail_reader_get_backend (reader);
 	folder = e_mail_reader_get_folder (reader);
 	display = e_mail_reader_get_mail_display (reader);
+	formatter = e_mail_display_get_formatter (display);
 
 	uids = e_mail_reader_get_selected_uids (reader);
 	g_return_if_fail (uids != NULL && uids->len == 1);
 	message_uid = g_ptr_array_index (uids, 0);
 
-	browser = e_mail_browser_new (backend, folder, message_uid,
-			E_MAIL_DISPLAY_MODE_SOURCE);
+	browser = e_mail_browser_new (backend, NULL, NULL, EM_FORMAT_WRITE_MODE_SOURCE);
+	e_mail_reader_set_folder (E_MAIL_READER (browser), folder);
+	e_mail_reader_set_message (E_MAIL_READER (browser), message_uid);
 
+	display = e_mail_reader_get_mail_display (E_MAIL_READER (browser));
+	e_mail_display_set_formatter (display, formatter);
+	e_mail_display_set_mode (display, EM_FORMAT_WRITE_MODE_SOURCE);
 	gtk_widget_show (browser);
 
 	em_utils_uids_free (uids);
@@ -2558,7 +2565,7 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 		(EEvent *) event, "message.reading",
 		(EEventTarget *) target);
 
-	mail_uri = em_format_build_mail_uri (folder, message_uid, NULL);
+	mail_uri = em_format_build_mail_uri (folder, message_uid, NULL, NULL);
 
 	session = webkit_get_default_session ();
 	if ((formatter = g_object_get_data (G_OBJECT (session), mail_uri)) == NULL) {

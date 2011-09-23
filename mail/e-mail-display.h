@@ -51,12 +51,6 @@ typedef struct _EMailDisplay EMailDisplay;
 typedef struct _EMailDisplayClass EMailDisplayClass;
 typedef struct _EMailDisplayPrivate EMailDisplayPrivate;
 
-typedef enum {
-	E_MAIL_DISPLAY_MODE_NORMAL,
-	E_MAIL_DISPLAY_MODE_ALL_HEADERS,
-	E_MAIL_DISPLAY_MODE_SOURCE
-} EMailDisplayMode;
-
 struct _EMailDisplay {
 	GtkViewport parent;
 	EMailDisplayPrivate *priv;
@@ -73,9 +67,21 @@ GType			e_mail_display_get_type			(void);
 EMFormatHTML *		e_mail_display_get_formatter	(EMailDisplay *display);
 void			e_mail_display_set_formatter	(EMailDisplay *display,
 						 	 EMFormatHTML *formatter);
+
 void			e_mail_display_set_mode		(EMailDisplay *display,
-							 EMailDisplayMode mode);
-EMailDisplayMode	e_mail_display_get_mode		(EMailDisplay *display);
+							 EMFormatWriteMode mode);
+EMFormatWriteMode	e_mail_display_get_mode		(EMailDisplay *display);
+void			e_mail_display_set_headers_collapsable
+							(EMailDisplay *display,
+							 gboolean collapsable);
+gboolean		e_mail_display_get_headers_collapsable
+							(EMailDisplay *display);
+void			e_mail_display_set_headers_collapsed
+							(EMailDisplay *display,
+							 gboolean collapsed);
+gboolean		e_mail_display_get_headers_collapsed
+							(EMailDisplay *display);
+
 void			e_mail_display_load		(EMailDisplay *display,
 						 	 const gchar *msg_uri);
 void			e_mail_display_reload		(EMailDisplay *display);

@@ -64,6 +64,7 @@ typedef struct _EMFormatPURI EMFormatPURI;
 typedef struct _EMFormatHeader EMFormatHeader;
 typedef struct _EMFormatHandler EMFormatHandler;
 typedef struct _EMFormatParserInfo EMFormatParserInfo;
+typedef struct _EMFormatWriterInfo EMFormatWriterInfo;
 
 typedef void		(*EMFormatParseFunc)	(EMFormat *emf,
 					 	 CamelMimePart *part,
@@ -73,19 +74,23 @@ typedef void		(*EMFormatParseFunc)	(EMFormat *emf,
 typedef void		(*EMFormatWriteFunc)	(EMFormat *emf,
 					 	 EMFormatPURI *puri,
 					 	 CamelStream *stream,
+					 	 EMFormatWriterInfo *info,
 					 	 GCancellable *cancellable);
 typedef GtkWidget*	(*EMFormatWidgetFunc)	(EMFormat *emf,
 					 	 EMFormatPURI *puri,
 					 	 GCancellable *cancellable);
 
 
-
-typedef struct _EMFormatHandler EMFormatHandler;
-
 typedef enum {
 	EM_FORMAT_HANDLER_INLINE = 1 << 0,
 	EM_FORMAT_HANDLER_INLINE_DISPOSITION = 1 << 1
 } EMFormatHandlerFlags;
+
+typedef enum {
+	EM_FORMAT_WRITE_MODE_NORMAL= 0,
+	EM_FORMAT_WRITE_MODE_ALL_HEADERS,
+	EM_FORMAT_WRITE_MODE_SOURCE
+} EMFormatWriteMode;
 
 struct _EMFormatHandler {
 	gchar *mime_type;
@@ -107,6 +112,12 @@ struct _EMFormatParserInfo {
 	/* EM_FORMAT_VALIDITY_* flags */
 	guint32 validity_type;
 	CamelCipherValidity *validity;
+};
+
+struct _EMFormatWriterInfo {
+	EMFormatWriteMode mode;
+	gboolean headers_collapsable;
+	gboolean headers_collapsed;
 };
 
 struct _EMFormatHeader {
@@ -284,6 +295,7 @@ void			em_format_empty_parser 		(EMFormat *emf,
 void			em_format_empty_writer 		(EMFormat *emf,
 							 EMFormatPURI *puri,
 							 CamelStream *stream,
+							 EMFormatWriterInfo *info,
 							 GCancellable *cancellable);
 
 
@@ -295,6 +307,7 @@ void			em_format_puri_free 		(EMFormatPURI *puri);
 
 void			em_format_puri_write 		(EMFormatPURI *puri,
 							 CamelStream *stream,
+							 EMFormatWriterInfo *info,
 							 GCancellable *cancellable);
 
 #endif /* EM_FORMAT_H */
