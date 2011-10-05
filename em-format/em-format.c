@@ -87,6 +87,19 @@ static void emf_source				(EMFormat *emf, CamelStream *stream, GCancellable *can
 
 /**************************************************************************/
 
+static gboolean
+is_secured (CamelMimePart *part)
+{
+	CamelContentType *ct = camel_mime_part_get_content_type (part);
+
+	return (camel_content_type_is (ct, "multipart", "signed") ||
+		camel_content_type_is (ct, "multipart", "encrypted") ||
+		camel_content_type_is (ct, "application", "x-inlinepgp-signed") ||
+		camel_content_type_is (ct, "application", "x-inlinepgp-encrypted") ||
+		camel_content_type_is (ct, "application", "x-pkcs7-mime") ||
+		camel_content_type_is (ct, "application", "pkcs7-mime"));
+}
+
 static void
 preserve_charset_in_content_type (CamelMimePart *ipart,
                                   CamelMimePart *opart)
@@ -215,7 +228,7 @@ emf_parse_application_xpkcs7mime (EMFormat *emf,
 	} else {
 		EMFormatParserInfo encinfo = {
 				info->handler,
-				EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_SMIME,
+				info->validity_type | EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_SMIME,
 				valid
 		};
 		gint len = part_id->len;
@@ -224,11 +237,15 @@ emf_parse_application_xpkcs7mime (EMFormat *emf,
 		em_format_parse_part (emf, opart, part_id, &encinfo, cancellable);
 		g_string_truncate (part_id, len);
 
-		/* Add a widget with details about the encryption */
-		g_string_append (part_id, ".encrypted.button");
-		em_format_parse_part_as (emf, part, part_id, &encinfo,
-			"x-evolution/message/x-secure-button", cancellable);
-		g_string_truncate (part_id, len);
+		/* Add a widget with details about the encryption, but only when
+		   the encrypted isn't itself secured, in that case it has created
+		   the button itself */
+		if (!is_secured (opart)) {
+			g_string_append (part_id, ".encrypted.button");
+			em_format_parse_part_as (emf, part, part_id, &encinfo,
+				"x-evolution/message/x-secure-button", cancellable);
+			g_string_truncate (part_id, len);
+		}
 
 		camel_cipher_validity_free (valid);
 	}
@@ -504,21 +521,30 @@ emf_parse_multipart_encrypted (EMFormat *emf,
 		g_clear_error (&local_error);
 		emf_parse_multipart_mixed (emf, part, part_id, info, cancellable);
 	} else {
+		gint len = part_id->len;
+
 		EMFormatParserInfo encinfo = {
 				info->handler,
-				EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_PGP,
-				camel_cipher_validity_clone (valid), };
-		gint len = part_id->len;
+				info->validity_type | EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_PGP,
+		};
+
+		if (info->validity)
+			camel_cipher_validity_envelope (valid, info->validity);
+		encinfo.validity = valid;
 
 		g_string_append (part_id, ".encrypted");
 		em_format_parse_part (emf, opart, part_id, &encinfo, cancellable);
 		g_string_truncate (part_id, len);
 
-		/* Add a widget with details about the encryption */
-		g_string_append (part_id, ".encrypted.button");
-		em_format_parse_part_as (emf, part, part_id, &encinfo,
-			"x-evolution/message/x-secure-button", cancellable);
-		g_string_truncate (part_id, len);
+		/* Add a widget with details about the encryption, but only when
+		   the encrypted isn't itself secured, in that case it has created
+		   the button itself */
+		if (!is_secured (opart)) {
+			g_string_append (part_id, ".encrypted.button");
+			em_format_parse_part_as (emf, part, part_id, &encinfo,
+				"x-evolution/message/x-secure-button", cancellable);
+			g_string_truncate (part_id, len);
+		}
 
 		camel_cipher_validity_free (valid);
 	}
@@ -637,14 +663,20 @@ emf_parse_multipart_signed (EMFormat *emf,
 			g_clear_error (&local_error);
 			emf_parse_multipart_mixed (emf, part, part_id,info,  cancellable);
 		} else {
+			gint i, nparts, len = part_id->len;
+			gboolean secured;
+
 			EMFormatParserInfo signinfo = {
 					info->handler,
-					validity_type | EM_FORMAT_VALIDITY_FOUND_SIGNED,
-					valid
+					info->validity_type | validity_type | EM_FORMAT_VALIDITY_FOUND_SIGNED,
 			};
 
-			gint i, nparts, len = part_id->len;
+			if (info->validity)
+				camel_cipher_validity_envelope (valid, info->validity);
+			signinfo.validity = valid;
+
 			nparts = camel_multipart_get_number (CAMEL_MULTIPART (mps));
+			secured = FALSE;
 			for (i = 0; i < nparts; i++) {
 				CamelMimePart *subpart;
 				subpart = camel_multipart_get_part (CAMEL_MULTIPART (mps), i);
@@ -652,13 +684,20 @@ emf_parse_multipart_signed (EMFormat *emf,
 				g_string_append_printf(part_id, ".signed.%d", i);
 				em_format_parse_part (emf, subpart, part_id, &signinfo, cancellable);
 				g_string_truncate (part_id, len);
+
+				if (!secured)
+					secured = is_secured (subpart);
 			}
 
-			/* Add a widget with details about the encryption */
-			g_string_append (part_id, ".signed.button");
-			em_format_parse_part_as (emf, part, part_id, &signinfo,
-			"x-evolution/message/x-secure-button", cancellable);
-			g_string_truncate (part_id, len);
+			/* Add a widget with details about the encryption, but only when
+			   the encrypted isn't itself secured, in that case it has created
+			   the button itself */
+			if (!secured) {
+				g_string_append (part_id, ".signed.button");
+				em_format_parse_part_as (emf, part, part_id, &signinfo,
+				"x-evolution/message/x-secure-button", cancellable);
+				g_string_truncate (part_id, len);
+			}
 
 			camel_cipher_validity_free (valid);
 		}
@@ -882,20 +921,27 @@ emf_parse_inlinepgp_signed (EMFormat *emf,
 	camel_mime_part_set_content (opart, (gchar *) ba->data, ba->len, type);
 	g_free (type);
 
+	if (info->validity)
+		camel_cipher_validity_envelope (valid, info->validity);
+
 	/* Pass it off to the real formatter */
 	len = part_id->len;
 	g_string_append (part_id, ".inlinepgp_signed");
 	signinfo.handler = info->handler;
-	signinfo.validity_type = EM_FORMAT_VALIDITY_FOUND_SIGNED | EM_FORMAT_VALIDITY_FOUND_PGP;
+	signinfo.validity_type = info->validity_type | EM_FORMAT_VALIDITY_FOUND_SIGNED | EM_FORMAT_VALIDITY_FOUND_PGP;
 	signinfo.validity = valid;
 	em_format_parse_part (emf, opart, part_id, &signinfo, cancellable);
 	g_string_truncate (part_id, len);
 
-	/* Add a widget with details about the encryption */
-	g_string_append (part_id, ".inlinepgp_signed.button");
-	em_format_parse_part_as (emf, opart, part_id, &signinfo,
-		"x-evolution/message/x-secure-button", cancellable);
-	g_string_truncate (part_id, len);
+	/* Add a widget with details about the encryption, but only when
+	   the encrypted isn't itself secured, in that case it has created
+	   the button itself */
+	if (!is_secured (opart)) {
+		g_string_append (part_id, ".inlinepgp_signed.button");
+		em_format_parse_part_as (emf, opart, part_id, &signinfo,
+			"x-evolution/message/x-secure-button", cancellable);
+		g_string_truncate (part_id, len);
+	}
 
 	/* Clean Up */
 	camel_cipher_validity_free (valid);
@@ -964,20 +1010,27 @@ emf_parse_inlinepgp_encrypted (EMFormat *emf,
 	preserve_charset_in_content_type (ipart, opart);
 	g_free (mime_type);
 
+	if (info->validity)
+		camel_cipher_validity_envelope (valid, info->validity);
+
 	/* Pass it off to the real formatter */
 	len = part_id->len;
 	g_string_append (part_id, ".inlinepgp_encrypted");
 	encinfo.handler = info->handler;
-	encinfo.validity_type = EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_PGP;
+	encinfo.validity_type = info->validity_type | EM_FORMAT_VALIDITY_FOUND_ENCRYPTED | EM_FORMAT_VALIDITY_FOUND_PGP;
 	encinfo.validity = valid;
 	em_format_parse_part (emf, opart, part_id, &encinfo, cancellable);
 	g_string_truncate (part_id, len);
 
-	/* Add a widget with details about the encryption */
-	g_string_append (part_id, ".inlinepgp_encrypted.button");
-	em_format_parse_part_as (emf, opart, part_id, &encinfo,
-		"x-evolution/message/x-secure-button", cancellable);
-	g_string_truncate (part_id, len);
+	/* Add a widget with details about the encryption, but only when
+	   the encrypted isn't itself secured, in that case it has created
+	   the button itself */
+	if (!is_secured (opart)) {
+		g_string_append (part_id, ".inlinepgp_encrypted.button");
+		em_format_parse_part_as (emf, opart, part_id, &encinfo,
+			"x-evolution/message/x-secure-button", cancellable);
+		g_string_truncate (part_id, len);
+	}
 
 	/* Clean Up */
 	camel_cipher_validity_free (valid);
@@ -1620,6 +1673,8 @@ em_format_add_puri (EMFormat *emf,
 
 	g_hash_table_insert (emf->mail_part_table,
 			puri->uri, puri);
+
+	d(printf("Added PURI %s\n", puri->uri));
 }
 
 EMFormatPURI*
