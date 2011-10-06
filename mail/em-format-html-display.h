@@ -52,8 +52,15 @@ G_BEGIN_DECLS
 typedef struct _EMFormatHTMLDisplay EMFormatHTMLDisplay;
 typedef struct _EMFormatHTMLDisplayClass EMFormatHTMLDisplayClass;
 typedef struct _EMFormatHTMLDisplayPrivate EMFormatHTMLDisplayPrivate;
+typedef struct _EMFormatAttachmentBarPURI EMFormatAttachmentBarPURI;
 typedef struct _EMFormatAttachmentPURI EMFormatAttachmentPURI;
 typedef struct _EMFormatSMIMEPURI EMFormatSMIMEPURI;
+
+struct _EMFormatAttachmentBarPURI {
+	EMFormatPURI puri;
+
+	EAttachmentStore *store;
+};
 
 struct _EMFormatAttachmentPURI {
 	EMFormatPURI puri;
@@ -110,9 +117,6 @@ struct _EMFormatHTMLDisplayClass {
 GType		em_format_html_display_get_type	(void);
 EMFormatHTMLDisplay *
 		em_format_html_display_new	(void);
-EAttachmentView *
-		em_format_html_display_get_attachment_view
-						(EMFormatHTMLDisplay *html_display);
 G_END_DECLS
 
 #endif /* EM_FORMAT_HTML_DISPLAY_H */
