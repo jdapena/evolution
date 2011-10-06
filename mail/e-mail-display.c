@@ -42,7 +42,7 @@
 #include <libsoup/soup-requester.h>
 
 struct _EMailDisplayPrivate {
-	GtkWidget *vbox;
+	GtkWidget *grid;
 
 	ESearchBar *searchbar;
 	EMFormatHTML *formatter;
@@ -473,26 +473,28 @@ mail_display_setup_webview (EMailDisplay *display)
 
 static void
 mail_display_insert_web_view (EMailDisplay *display,
-			      EWebView *web_view,
-			      gboolean expandable)
+			      EWebView *web_view)
 {
 	GtkWidget *scrolled_window;
 
 	display->priv->webviews = g_list_append (display->priv->webviews, web_view);
-
 	scrolled_window = gtk_scrolled_window_new (NULL, NULL);
 	g_object_set (G_OBJECT (scrolled_window),
 		"hscrollbar-policy", GTK_POLICY_NEVER,
 		"vscrollbar-policy", GTK_POLICY_NEVER,
-		"shadow-type", GTK_SHADOW_NONE, NULL);
+		"shadow-type", GTK_SHADOW_NONE,
+		"expand", TRUE,
+		NULL);
 		//"min-content-height", 300, NULL);
 	gtk_container_add (GTK_CONTAINER (scrolled_window), GTK_WIDGET (web_view));
 
-	gtk_box_pack_start (GTK_BOX (display->priv->vbox), scrolled_window, expandable, TRUE, 0);
+	gtk_container_add (GTK_CONTAINER (display->priv->grid), scrolled_window);
 	gtk_widget_show_all (scrolled_window);
 
 #if 0
-	gtk_box_pack_start (GTK_BOX (display->priv->vbox), GTK_WIDGET (web_view), expandable, TRUE, 0);
+	g_object_set (G_OBJECT (web_view),
+		"expand", TRUE, NULL);
+	gtk_container_add (GTK_CONTAINER (display->priv->grid), GTK_WIDGET (web_view));
 	gtk_widget_show_all (GTK_WIDGET (web_view));
 #endif
 }
@@ -510,7 +512,7 @@ mail_display_load_as_source (EMailDisplay *display,
 	e_mail_display_clear (display);
 
 	web_view = mail_display_setup_webview (display);
-	mail_display_insert_web_view (display, web_view, TRUE);
+	mail_display_insert_web_view (display, web_view);
 
 	uri = em_format_build_mail_uri (emf->folder, emf->message_uid,
 		"part_id", G_TYPE_STRING, ".message",
@@ -518,7 +520,7 @@ mail_display_load_as_source (EMailDisplay *display,
 		NULL);
 	e_web_view_load_uri (web_view, uri);
 
-	gtk_widget_show_all (display->priv->vbox);
+	gtk_widget_show_all (display->priv->grid);
 }
 
 static void
@@ -528,9 +530,11 @@ mail_display_load_normal (EMailDisplay *display,
 	EWebView *web_view;
 	EMFormatPURI *puri;
 	EMFormat *emf = (EMFormat *) display->priv->formatter;
+	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) emf;
+	EAttachmentView *attachment_view;
 	gchar *uri;
 	GList *iter;
-	GtkBox *box;
+	GtkContainer *grid;
 
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
@@ -544,9 +548,11 @@ mail_display_load_normal (EMailDisplay *display,
 	/* First remove all widgets left after previous message */
 	e_mail_display_clear (display);
 
-	box = GTK_BOX (display->priv->vbox);
-	gtk_widget_show (display->priv->vbox);
 
+	grid = GTK_CONTAINER (display->priv->grid);
+	gtk_widget_show (display->priv->grid);
+
+	attachment_view = NULL;
 	for (iter = emf->mail_part_list; iter; iter = iter->next) {
 		GtkWidget *widget = NULL;
 
@@ -566,23 +572,30 @@ mail_display_load_normal (EMailDisplay *display,
 				continue;
 			}
 
-			gtk_box_pack_start (box, widget, TRUE, TRUE, 0);
+			if (E_IS_ATTACHMENT_BUTTON (widget) && attachment_view)
+				e_attachment_button_set_view (E_ATTACHMENT_BUTTON (widget),
+					attachment_view);
+
+			gtk_container_add (grid, widget);
+
 			if (E_IS_ATTACHMENT_VIEW (widget)) {
-				EAttachmentStore *store = e_attachment_view_get_store (E_ATTACHMENT_VIEW (widget));
+				EAttachmentStore *store;
+
+				attachment_view = E_ATTACHMENT_VIEW (widget);
+				store = e_attachment_view_get_store (attachment_view);
+
 				if (e_attachment_store_get_num_attachments (store) > 0)
 					gtk_widget_show (widget);
 				else
 					gtk_widget_hide (widget);
-
-				g_object_ref (widget);
-			} else
+			} else {
 				gtk_widget_show (widget);
-
+			}
 		}
 
 		if ((!puri->is_attachment && puri->write_func) || (puri->is_attachment && puri->write_func && puri->widget_func)) {
 			web_view = mail_display_setup_webview (display);
-			mail_display_insert_web_view (display, web_view, TRUE);
+			mail_display_insert_web_view (display, web_view);
 			e_web_view_load_uri (web_view, uri);
 
 			if (widget) {
@@ -662,16 +675,14 @@ mail_display_init (EMailDisplay *display)
 {
 	SoupSession *session;
 	SoupSessionFeature *feature;
-	GValue margin = {0};
 
 	display->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		display, E_TYPE_MAIL_DISPLAY, EMailDisplayPrivate);
 
-	display->priv->vbox = gtk_vbox_new (FALSE, 10);
-	gtk_container_add (GTK_CONTAINER (display), display->priv->vbox);
-	g_value_init (&margin, G_TYPE_INT);
-	g_value_set_int (&margin, 10);
-	g_object_set_property (G_OBJECT (display->priv->vbox), "margin", &margin);
+	display->priv->grid = g_object_new (GTK_TYPE_GRID,
+		"orientation", GTK_ORIENTATION_VERTICAL,
+		"margin", 10, NULL);
+	gtk_container_add (GTK_CONTAINER (display), display->priv->grid);
 
 	display->priv->webviews = NULL;
 
@@ -903,8 +914,8 @@ e_mail_display_set_status (EMailDisplay *display,
 	e_mail_display_clear (display);
 
 	label = gtk_label_new (status);
-	gtk_box_pack_start (GTK_BOX (display->priv->vbox), label, TRUE, TRUE, 0);
-	gtk_widget_show_all (display->priv->vbox);
+	gtk_container_add (GTK_CONTAINER (display->priv->grid), label);
+	gtk_widget_show_all (display->priv->grid);
 }
 
 static void
@@ -915,7 +926,7 @@ remove_widget (GtkWidget *widget, gpointer user_data)
 	if (!GTK_IS_WIDGET (widget))
 		return;
 
-	gtk_container_remove  (GTK_CONTAINER (display->priv->vbox), widget);
+	gtk_container_remove  (GTK_CONTAINER (display->priv->grid), widget);
 }
 
 void
@@ -923,9 +934,9 @@ e_mail_display_clear (EMailDisplay *display)
 {
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
-	gtk_widget_hide (display->priv->vbox);
+	gtk_widget_hide (display->priv->grid);
 
-	gtk_container_foreach (GTK_CONTAINER (display->priv->vbox),
+	gtk_container_foreach (GTK_CONTAINER (display->priv->grid),
 		(GtkCallback) remove_widget, display);
 
 	g_list_free (display->priv->webviews);

@@ -68,7 +68,7 @@
 #define d(x)
 
 struct _EMFormatHTMLDisplayPrivate {
-	EAttachmentView *attachment_view;
+		void *dummy;
 };
 
 /* TODO: move the dialogue elsehwere */
@@ -110,6 +110,53 @@ static void efhd_free_attach_puri_data (EMFormatPURI *puri);
 static void efhd_builtin_init (EMFormatHTMLDisplayClass *efhc);
 
 static gpointer parent_class;
+
+static EAttachmentStore*
+find_parent_attachment_store (EMFormatHTMLDisplay *efhd, GString *part_id)
+{
+	EMFormat *emf = (EMFormatHTML *) efhd;
+	EMFormatAttachmentBarPURI *abp;
+	EMFormatPURI *puri;
+	gchar *tmp, *pos;
+
+	tmp = g_strdup (part_id->str);
+
+	do {
+		gchar *id;
+
+		pos = g_strrstr (tmp, ".");
+		if (!pos)
+			break;
+
+		g_free (tmp);
+		tmp = g_strndup (part_id->str, pos - tmp);
+		id = g_strdup_printf ("%s.attachment-bar", tmp);
+
+		puri = g_hash_table_lookup (emf->mail_part_table, id);
+
+		g_free (id);
+
+	} while (pos && !puri);
+
+	g_free (tmp);
+
+	abp = (EMFormatAttachmentBarPURI *) puri;
+
+	return abp->store;
+}
+
+static void
+efhd_attachment_bar_puri_free (EMFormatPURI *puri)
+{
+	EMFormatAttachmentBarPURI *abp;
+
+	abp = (EMFormatAttachmentBarPURI *) puri;
+
+	if (abp->store) {
+		g_object_unref (abp->store);
+		abp->store = NULL;
+	}
+}
 
 static void
 efhd_xpkcs7mime_free (EMFormatPURI *puri)
@@ -440,7 +487,7 @@ efhd_parse_attachment (EMFormat *emf,
 	else
 		parent = NULL;
 
-	store = e_attachment_view_get_store (efhd->priv->attachment_view);
+	store = find_parent_attachment_store (efhd, part_id);
 	e_attachment_store_add_attachment (store, puri->attachment);
 
 	if (emf->folder && emf->folder->summary && emf->message_uid) {
@@ -735,11 +782,6 @@ efhd_finalize (GObject *object)
 	efhd = EM_FORMAT_HTML_DISPLAY (object);
 	g_return_if_fail (efhd != NULL);
 
-	if (efhd->priv->attachment_view) {
-		gtk_widget_destroy (GTK_WIDGET (efhd->priv->attachment_view));
-		efhd->priv->attachment_view = NULL;
-	}
-
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -780,8 +822,6 @@ efhd_init (EMFormatHTMLDisplay *efhd)
 
 	efhd->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		efhd, EM_TYPE_FORMAT_HTML_DISPLAY, EMFormatHTMLDisplayPrivate);
-
-	efhd->priv->attachment_view = E_ATTACHMENT_VIEW (e_mail_attachment_bar_new ());
 
 	/* we want to convert url's etc */
 	EM_FORMAT_HTML (efhd)->text_html_flags |=
@@ -964,7 +1004,7 @@ efhd_attachment_button (EMFormat *emf,
 		return NULL;
 	}
 
-	widget = e_attachment_button_new (efhd->priv->attachment_view);
+	widget = e_attachment_button_new ();
 	e_attachment_button_set_attachment (
 		E_ATTACHMENT_BUTTON (widget), info->attachment);
 	gtk_widget_set_can_focus (widget, TRUE);
@@ -984,9 +1024,14 @@ efhd_attachment_bar (EMFormat *emf,
 		     EMFormatPURI *puri,
 		     GCancellable *cancellable)
 {
-	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay *) emf;
+	EMFormatHTMLDisplay *efhd = (EMFormatHTMLDisplay*) emf;
+	EMFormatAttachmentBarPURI *abp = (EMFormatAttachmentBarPURI *) puri;
+	GtkWidget *widget;
 
-	return GTK_WIDGET (efhd->priv->attachment_view);
+	widget = e_mail_attachment_bar_new (abp->store);
+	printf("Create bar for PURI %p", puri);
+
+	return widget;
 }
 
 static void
@@ -1030,7 +1075,7 @@ efhd_message_add_bar (EMFormat *emf,
                       GCancellable *cancellable)
 {
 	gchar *classid;
-	EMFormatAttachmentPURI *puri;
+	EMFormatAttachmentBarPURI *puri;
 	gint len;
 
 	if (g_cancellable_is_cancelled (cancellable))
@@ -1038,9 +1083,12 @@ efhd_message_add_bar (EMFormat *emf,
 
 	len = part_id->len;
 	g_string_append (part_id, ".attachment-bar");
-	puri = (EMFormatAttachmentPURI *) em_format_puri_new (
-			emf, sizeof (EMFormatAttachmentPURI), part, part_id->str);
+	puri = (EMFormatAttachmentBarPURI *) em_format_puri_new (
+			emf, sizeof (EMFormatAttachmentBarPURI), part, part_id->str);
 	puri->puri.widget_func = efhd_attachment_bar;
+	puri->puri.free = efhd_attachment_bar_puri_free;
+	puri->store = E_ATTACHMENT_STORE (e_attachment_store_new ());
+
 	em_format_add_puri (emf, (EMFormatPURI*) puri);
 
 	g_string_truncate (part_id, len);
@@ -1192,13 +1240,4 @@ efhd_free_attach_puri_data (EMFormatPURI *puri)
 
 	g_free (info->attachment_view_part_id);
 	info->attachment_view_part_id = NULL;
-}
-
-/* returned object owned by html_display, thus do not unref it */
-EAttachmentView *
-em_format_html_display_get_attachment_view (EMFormatHTMLDisplay *efhd)
-{
-	g_return_val_if_fail (EM_IS_FORMAT_HTML_DISPLAY (efhd), NULL);
-
-	return E_ATTACHMENT_VIEW (efhd->priv->attachment_view);
 }

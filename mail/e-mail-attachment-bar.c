@@ -58,7 +58,8 @@ enum {
 	PROP_ACTIVE_VIEW,
 	PROP_DRAGGING,
 	PROP_EDITABLE,
-	PROP_EXPANDED
+	PROP_EXPANDED,
+	PROP_STORE
 };
 
 static gpointer parent_class;
@@ -66,7 +67,6 @@ static gpointer parent_class;
 static void
 mail_attachment_bar_update_status (EMailAttachmentBar *bar)
 {
-	EAttachmentView *view;
 	EAttachmentStore *store;
 	GtkActivatable *activatable;
 	GtkAction *action;
@@ -76,8 +76,7 @@ mail_attachment_bar_update_status (EMailAttachmentBar *bar)
 	gchar *display_size;
 	gchar *markup;
 
-	view = E_ATTACHMENT_VIEW (bar);
-	store = e_attachment_view_get_store (view);
+	store = E_ATTACHMENT_STORE (bar->priv->model);
 	label = GTK_LABEL (bar->priv->status_label);
 
 	num_attachments = e_attachment_store_get_num_attachments (store);
@@ -108,6 +107,31 @@ mail_attachment_bar_update_status (EMailAttachmentBar *bar)
 }
 
 static void
+mail_attachment_bar_set_store (EMailAttachmentBar *bar,
+			       EAttachmentStore *store)
+{
+	g_return_if_fail (E_IS_ATTACHMENT_STORE (store));
+
+	bar->priv->model = g_object_ref (store);
+
+	gtk_icon_view_set_model (GTK_ICON_VIEW (bar->priv->icon_view),
+		bar->priv->model);
+	gtk_tree_view_set_model (GTK_TREE_VIEW (bar->priv->tree_view),
+		bar->priv->model);
+
+	g_signal_connect_swapped (
+		bar->priv->model, "notify::num-attachments",
+		G_CALLBACK (mail_attachment_bar_update_status), bar);
+
+	g_signal_connect_swapped (
+		bar->priv->model, "notify::total-size",
+		G_CALLBACK (mail_attachment_bar_update_status), bar);
+
+	/* Initialize */
+	mail_attachment_bar_update_status (bar);
+}
+
+static void
 mail_attachment_bar_set_property (GObject *object,
                                   guint property_id,
                                   const GValue *value,
@@ -115,7 +139,7 @@ mail_attachment_bar_set_property (GObject *object,
 {
 	switch (property_id) {
 		case PROP_ACTIVE_VIEW:
-			e_mail_attachment_bar_set_active_view (
+				e_mail_attachment_bar_set_active_view (
 				E_MAIL_ATTACHMENT_BAR (object),
 				g_value_get_int (value));
 			return;
@@ -136,6 +160,11 @@ mail_attachment_bar_set_property (GObject *object,
 			e_mail_attachment_bar_set_expanded (
 				E_MAIL_ATTACHMENT_BAR (object),
 				g_value_get_boolean (value));
+			return;
+		case PROP_STORE:
+			mail_attachment_bar_set_store (
+				E_MAIL_ATTACHMENT_BAR (object),
+				g_value_get_object (value));
 			return;
 	}
 
@@ -176,6 +205,11 @@ mail_attachment_bar_get_property (GObject *object,
 				e_mail_attachment_bar_get_expanded (
 				E_MAIL_ATTACHMENT_BAR (object)));
 			return;
+		case PROP_STORE:
+			g_value_set_object (
+				value,
+				e_mail_attachment_bar_get_store (
+				E_MAIL_ATTACHMENT_BAR (object)));
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -189,7 +223,6 @@ mail_attachment_bar_dispose (GObject *object)
 	priv = E_MAIL_ATTACHMENT_BAR (object)->priv;
 
 	if (priv->model != NULL) {
-		e_attachment_store_remove_all (E_ATTACHMENT_STORE (priv->model));
 		g_object_unref (priv->model);
 		priv->model = NULL;
 	}
@@ -334,17 +367,6 @@ mail_attachment_bar_get_private (EAttachmentView *view)
 	return e_attachment_view_get_private (view);
 }
 
-static EAttachmentStore *
-mail_attachment_bar_get_store (EAttachmentView *view)
-{
-	EMailAttachmentBarPrivate *priv;
-
-	priv = E_MAIL_ATTACHMENT_BAR (view)->priv;
-	view = E_ATTACHMENT_VIEW (priv->icon_view);
-
-	return e_attachment_view_get_store (view);
-}
-
 static GtkTreePath *
 mail_attachment_bar_get_path_at_pos (EAttachmentView *view,
                                      gint x,
@@ -476,6 +498,17 @@ mail_attachment_bar_class_init (EMailAttachmentBarClass *class)
 			G_PARAM_READWRITE |
 			G_PARAM_CONSTRUCT));
 
+	g_object_class_install_property (
+		object_class,
+		PROP_STORE,
+		g_param_spec_object (
+			"store",
+			"Attachment Store",
+			NULL,
+			E_TYPE_ATTACHMENT_STORE,
+			G_PARAM_READWRITE |
+			G_PARAM_CONSTRUCT_ONLY));
+
 	g_object_class_override_property (
 		object_class, PROP_DRAGGING, "dragging");
 
@@ -487,7 +520,7 @@ static void
 mail_attachment_bar_interface_init (EAttachmentViewInterface *interface)
 {
 	interface->get_private = mail_attachment_bar_get_private;
-	interface->get_store = mail_attachment_bar_get_store;
+	interface->get_store = e_mail_attachment_bar_get_store;
 	interface->get_path_at_pos = mail_attachment_bar_get_path_at_pos;
 	interface->get_selected_paths = mail_attachment_bar_get_selected_paths;
 	interface->path_is_selected = mail_attachment_bar_path_is_selected;
@@ -509,7 +542,6 @@ mail_attachment_bar_init (EMailAttachmentBar *bar)
 
 	bar->priv = G_TYPE_INSTANCE_GET_PRIVATE (
 		bar, E_TYPE_MAIL_ATTACHMENT_BAR, EMailAttachmentBarPrivate);
-	bar->priv->model = e_attachment_store_new ();
 
 	gtk_box_set_spacing (GTK_BOX (bar), 6);
 
@@ -633,14 +665,6 @@ mail_attachment_bar_init (EMailAttachmentBar *bar)
 	bar->priv->status_label = g_object_ref (widget);
 	gtk_widget_show (widget);
 
-	g_signal_connect_swapped (
-		bar->priv->model, "notify::num-attachments",
-		G_CALLBACK (mail_attachment_bar_update_status), bar);
-
-	g_signal_connect_swapped (
-		bar->priv->model, "notify::total-size",
-		G_CALLBACK (mail_attachment_bar_update_status), bar);
-
 	g_object_unref (size_group);
 }
 
@@ -680,11 +704,14 @@ e_mail_attachment_bar_get_type (void)
 }
 
 GtkWidget *
-e_mail_attachment_bar_new (void)
+e_mail_attachment_bar_new (EAttachmentStore *store)
 {
+	g_return_val_if_fail (E_IS_ATTACHMENT_STORE (store), NULL);
+
 	return g_object_new (
 		E_TYPE_MAIL_ATTACHMENT_BAR,
-		"editable", FALSE, NULL);
+		"editable", FALSE,
+		"store", store, NULL);
 }
 
 gint
@@ -752,4 +779,12 @@ e_mail_attachment_bar_set_expanded (EMailAttachmentBar *bar,
 	bar->priv->expanded = expanded;
 
 	g_object_notify (G_OBJECT (bar), "expanded");
+}
+
+EAttachmentStore*
+e_mail_attachment_bar_get_store (EMailAttachmentBar *bar)
+{
+	g_return_val_if_fail (E_IS_MAIL_ATTACHMENT_BAR (bar), NULL);
+
+	return E_ATTACHMENT_STORE (bar->priv->model);
 }
