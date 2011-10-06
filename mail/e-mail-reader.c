@@ -2515,6 +2515,7 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 	gint timeout_interval;
 	GError *error = NULL;
 	SoupSession *session;
+	GHashTable *formatters;
 
 	reader = closure->reader;
 	message_uid = closure->message_uid;
@@ -2568,16 +2569,22 @@ mail_reader_message_loaded_cb (CamelFolder *folder,
 	mail_uri = em_format_build_mail_uri (folder, message_uid, NULL, NULL);
 
 	session = webkit_get_default_session ();
-	if ((formatter = g_object_get_data (G_OBJECT (session), mail_uri)) == NULL) {
+	formatters = g_object_get_data (G_OBJECT (session), "formatters");
+	if (!formatters) {
+		formatters = g_hash_table_new_full (g_str_hash, g_str_equal,
+			(GDestroyNotify) g_free, (GDestroyNotify) g_object_unref);
+		g_object_set_data (G_OBJECT (session), "formatters", formatters);
+	}
+
+	if ((formatter = g_hash_table_lookup (formatters, mail_uri)) == NULL) {
 		formatter = em_format_html_display_new ();
 		EM_FORMAT (formatter)->message_uid = g_strdup (message_uid);
 		em_format_parse (EM_FORMAT (formatter), message, folder, NULL);
-		g_object_set_data (G_OBJECT (session), mail_uri, formatter);
+		g_hash_table_insert (formatters, mail_uri, formatter);
 	}
 
 	e_mail_display_set_formatter (display, EM_FORMAT_HTML (formatter));
 	e_mail_display_load (display, mail_uri);
-	g_free (mail_uri);
 
 	/* Reset the shell view icon. */
 	e_shell_event (shell, "mail-icon", (gpointer) "evolution-mail");

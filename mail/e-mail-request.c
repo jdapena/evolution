@@ -175,6 +175,7 @@ mail_request_send_async (SoupRequest *request,
 	d(printf("received request for %s\n", soup_uri_to_string (uri, FALSE)));
 
 	if (g_strcmp0 (uri->scheme, "mail") == 0) {
+		GHashTable *formatters;
 		gchar *uri_str;
 
 		if (!uri->query) {
@@ -182,9 +183,11 @@ mail_request_send_async (SoupRequest *request,
 			g_return_if_fail (uri->query);
 		}
 
-		uri_str = g_strdup_printf ("%s://%s%s", uri->scheme, uri->host, uri->path);
+		formatters = g_object_get_data (G_OBJECT (session), "formatters");
+		g_return_if_fail (formatters != NULL);
 
-		emr->priv->efh = g_object_get_data (G_OBJECT (session), uri_str);
+		uri_str = g_strdup_printf ("%s://%s%s", uri->scheme, uri->host, uri->path);
+		emr->priv->efh = g_hash_table_lookup (formatters, uri_str);
 		g_free (uri_str);
 		g_return_if_fail (emr->priv->efh);
 
