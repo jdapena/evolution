@@ -85,6 +85,7 @@ libemiscwidgets_la_CPPFLAGS =						\
 	$(GNOME_PLATFORM_CFLAGS)					\
 	$(CHAMPLAIN_CFLAGS)						\
 	$(GEOCLUE_CFLAGS)						\
+	$(GTKHTML_CFLAGS)						\
 	$(CLUTTER_CFLAGS)
 
 libemiscwidgets_la_SOURCES =			\

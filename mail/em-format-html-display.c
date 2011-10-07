@@ -495,7 +495,7 @@ efhd_parse_attachment (EMFormat *emf,
 	if (emf->folder && emf->folder->summary && emf->message_uid) {
 		CamelMessageInfo *mi;
 
-		mi = camel_folder_summary_uid (emf->folder->summary, emf->message_uid);
+		mi = camel_folder_summary_get (emf->folder->summary, emf->message_uid);
 		if (mi) {
 			const CamelMessageContentInfo *ci;
 
