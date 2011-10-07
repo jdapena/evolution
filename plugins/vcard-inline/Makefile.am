@@ -29,6 +29,7 @@ liborg_gnome_vcard_inline_la_LIBADD =					\
 	$(top_builddir)/addressbook/gui/widgets/libeabwidgets.la	\
 	$(top_builddir)/addressbook/gui/merging/libeabbookmerging.la	\
 	$(top_builddir)/addressbook/printing/libecontactprint.la	\
+	$(top_builddir)/em-format/libemformat.la			\
 	$(EVOLUTION_DATA_SERVER_LIBS)					\
 	$(GNOME_PLATFORM_LIBS)						\
 	$(GTKHTML_LIBS)
