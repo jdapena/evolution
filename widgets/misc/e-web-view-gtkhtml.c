@@ -30,7 +30,7 @@
 #include <e-util/e-util.h>
 #include <e-util/e-alert-dialog.h>
 #include <e-util/e-alert-sink.h>
-#include <e-util/e-extensible.h>
+#include <libebackend/e-extensible.h>
 #include <e-util/e-plugin-ui.h>
 
 #include "e-popup-action.h"
