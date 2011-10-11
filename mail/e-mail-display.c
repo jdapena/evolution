@@ -472,20 +472,45 @@ mail_display_setup_webview (EMailDisplay *display)
 }
 
 static void
+mail_display_on_web_view_vadjustment_changed (GtkAdjustment* adjustment,
+					      gpointer user_data)
+{
+	GtkWidget *widget = user_data;
+	int upper = gtk_adjustment_get_upper (GTK_ADJUSTMENT (adjustment));
+	int page_size = gtk_adjustment_get_page_size (GTK_ADJUSTMENT (adjustment));
+	int widget_height = gtk_widget_get_allocated_height (widget);
+
+	if (page_size < upper) {
+		gtk_widget_set_size_request (GTK_WIDGET (widget), -1, upper + (widget_height - page_size));
+		gtk_widget_queue_resize (GTK_WIDGET (widget));
+	}
+	
+}
+
+static void
 mail_display_insert_web_view (EMailDisplay *display,
 			      EWebView *web_view)
 {
 	GtkWidget *scrolled_window;
+	GtkAdjustment *web_view_vadjustment;
 
 	display->priv->webviews = g_list_append (display->priv->webviews, web_view);
 	scrolled_window = gtk_scrolled_window_new (NULL, NULL);
 	g_object_set (G_OBJECT (scrolled_window),
-		"hscrollbar-policy", GTK_POLICY_NEVER,
-		"vscrollbar-policy", GTK_POLICY_NEVER,
+		"hscrollbar-policy", GTK_POLICY_AUTOMATIC,
+		"vscrollbar-policy", GTK_POLICY_AUTOMATIC,
 		"shadow-type", GTK_SHADOW_NONE,
-		"expand", TRUE,
+		"hexpand", TRUE,
+		      "vexpand", FALSE,
+		      "vexpand-set", TRUE,
 		NULL);
+	g_object_set (G_OBJECT (web_view),
+		      "vscroll-policy", GTK_SCROLL_NATURAL,
+		      NULL);
 		//"min-content-height", 300, NULL);
+	web_view_vadjustment = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (scrolled_window));
+	g_signal_connect (G_OBJECT (web_view_vadjustment), "changed",
+			  G_CALLBACK (mail_display_on_web_view_vadjustment_changed), scrolled_window);
 	gtk_container_add (GTK_CONTAINER (scrolled_window), GTK_WIDGET (web_view));
 
 	gtk_container_add (GTK_CONTAINER (display->priv->grid), scrolled_window);
